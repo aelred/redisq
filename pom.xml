@@ -12,7 +12,7 @@
     <packaging>jar</packaging>
     <name>Redisq</name>
     <description>Queue in Redis</description>
-    <url>https://github.com/grakn/redisq</url>
+    <url>https://github.com/graknlabs/redisq</url>
     <prerequisites>
         <maven>3.0.0</maven>
     </prerequisites>
@@ -26,12 +26,22 @@
         <metrics.version>3.2.3</metrics.version>
     </properties>
     <distributionManagement>
-        <site>
-            <id>github-pages-site</id>
-            <name>Deployment through GitHub's site deployment plugin</name>
-            <url>site/${project.version}</url>
-        </site>
+        <snapshotRepository>
+            <id>ossrh</id>
+            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+        </snapshotRepository>
+        <repository>
+            <id>ossrh</id>
+            <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
     </distributionManagement>
+    <repositories>
+        <!--Snapshot repository for 3rd party libraries -->
+        <repository>
+            <id>development-snapshots</id>
+            <url>https://maven.grakn.ai/content/repositories/snapshots/</url>
+        </repository>
+    </repositories>
     <developers>
         <developer>
             <id>pluraliseseverythings</id>
