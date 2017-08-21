@@ -111,7 +111,7 @@ public class RedisqTest {
                         .setJedisPool(jedisPool)
                         .setDocumentClass(DummyObject.class)
                         .createRedisq();
-                // Don't start subscription
+                // Don't start consumer
                 for(int j = 0; j < DOCUMENTS; j++) {
                     redisq.push(new DummyObject(pid  + "_" +  id));
                     id++;
