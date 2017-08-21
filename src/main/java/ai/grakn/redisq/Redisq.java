@@ -32,6 +32,7 @@ import static ai.grakn.redisq.State.*;
 import static com.codahale.metrics.MetricRegistry.name;
 
 public class Redisq<T extends Document> implements Queue<T> {
+
     private static final Logger LOG = LoggerFactory.getLogger(Redisq.class);
     static final Mapper<StateInfo> stateMapper = new Mapper<>(StateInfo.class);
     public static final Retryer<Integer> CLOSE_RETRIER = RetryerBuilder.<Integer>newBuilder()
@@ -60,9 +61,10 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Timer pushTimer;
     private final Meter serializationErrors;
 
-    public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime, Duration discardTime,
-                  Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
-                  MetricRegistry metricRegistry) {
+    public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
+            Duration discardTime,
+            Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
+            MetricRegistry metricRegistry) {
         this.name = name;
         this.timeout = timeout;
         this.ttlStateInfo = (int) ttlStateInfo.getSeconds();
@@ -74,10 +76,12 @@ public class Redisq<T extends Document> implements Queue<T> {
         this.inFlightQueueName = names.inFlightQueueNameFor(name);
         this.jedisPool = jedisPool;
         this.threadPool = threadPool;
-        this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory().constructParametricType(TimedWrap.class, klass));
+        this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory()
+                .constructParametricType(TimedWrap.class, klass));
 
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
-        this.serializationErrors = metricRegistry.meter(name(this.getClass(), "serialization_errors"));
+        this.serializationErrors = metricRegistry
+                .meter(name(this.getClass(), "serialization_errors"));
     }
 
     @Override
@@ -90,8 +94,10 @@ public class Redisq<T extends Document> implements Queue<T> {
             stateSerialized = stateMapper.serialize(new StateInfo(NEW, timestampMs));
         } catch (SerializationException e) {
             serializationErrors.mark();
-            throw new RuntimeException("Could not serialize element " + document.getIdAsString(), e);
+            throw new RuntimeException("Could not serialize element " + document.getIdAsString(),
+                    e);
         }
+        LOG.debug("Jedis active: {}, idle: {}", jedisPool.getNumActive(), jedisPool.getNumIdle());
         try (Jedis jedis = jedisPool.getResource(); Timer.Context ignored = pushTimer.time();) {
             Transaction transaction = jedis.multi();
             String id = document.getIdAsString();
@@ -118,6 +124,11 @@ public class Redisq<T extends Document> implements Queue<T> {
         inFlightLoop = Executors.newSingleThreadExecutor().submit(() -> {
             while (working.get()) {
                 inflightIteration();
+                try {
+                    TimeUnit.MILLISECONDS.sleep(500);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
             }
         });
     }
@@ -127,28 +138,40 @@ public class Redisq<T extends Document> implements Queue<T> {
         return new StateFuture(state, id, jedisPool, timeout, unit);
     }
 
+    @Override
+    public Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout,
+            TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException {
+        return new StateFuture(state, id, pool, timeout, unit);
+    }
+
     private void inflightIteration() {
+        List<String> processingElements;
         try (Jedis jedis = jedisPool.getResource()) {
-            List<String> processingElements = jedis.lrange(inFlightQueueName, 0, -1);
-            processingElements
-                    .forEach(id -> {
+            processingElements = jedis.lrange(inFlightQueueName, 0, -1);
+        }
+        processingElements
+                .forEach(id -> {
+                    try (Jedis jedis = jedisPool.getResource()) {
                         String lockId = names.lockKeyFromId(id);
                         // TODO We might get more than one consumer doing this
                         Long ttl = jedis.ttl(lockId);
                         if (ttl == 0  /* TODO check this || ttl == -2 */) {
-                            LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id, lockId, ttl);
+                            LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id,
+                                    lockId, ttl);
                             // Restore it in the main queue
                             Transaction multi = jedis.multi();
                             multi.lrem(inFlightQueueName, 1, id);
                             multi.lpush(queueName, id);
                             multi.exec();
                         }
-                    });
-        }
+                    }
+                });
     }
 
     private void iteration() {
         long timestampMs = System.currentTimeMillis();
+        String value;
+        String key;
         try (Jedis jedis = jedisPool.getResource()) {
             String id = jedis.brpoplpush(queueName, inFlightQueueName, (int) timeout.getSeconds());
             // If something goes wrong after this, the job will be stuck in inflightIteration
@@ -160,36 +183,41 @@ public class Redisq<T extends Document> implements Queue<T> {
                     LOG.warn("State already present for {}: {}", id, state.get().getState());
                 }
                 setState(jedis, timestampMs, id, PROCESSING);
-                String key = names.contentKeyFromId(id);
-                String value = jedis.get(key);
-                TimedWrap<T> element;
-                try {
-                    element = mapper.deserialize(value);
-                } catch (DeserializationException e) {
-                    LOG.error("Failed deserialization, skipping element: {}", value, e);
-                    return;
-                }
-                try {
-                    if (Duration.ofMillis(timestampMs - element.getTimestampMs()).compareTo(discardTime) < 0) {
-                        threadPool.execute(() -> {
-                            runningThreads.incrementAndGet();
-                            try {
-                                subscription.process(element.getElement());
-                            } finally {
-                                runningThreads.decrementAndGet();
-                            }
-                        });
-                    }
-                } catch (RejectedExecutionException e) {
-                    try {
-                        jedis.lpush(key, value);
-                        LOG.error("Rejected execution, re-enqueued {}", element.getElement().getIdAsString(), e);
-                    } catch (Exception pushE) {
-                        LOG.error("Could not re-enqueue {}", element.getElement().getIdAsString(), e);
-                    }
-                }
+                key = names.contentKeyFromId(id);
+                value = jedis.get(key);
             } else {
                 LOG.debug("Empty queue");
+                return;
+            }
+        }
+        if (value != null && key != null) {
+            TimedWrap<T> element;
+            try {
+                element = mapper.deserialize(value);
+            } catch (DeserializationException e) {
+                LOG.error("Failed deserialization, skipping element: {}", value, e);
+                return;
+            }
+            try {
+                if (Duration.ofMillis(timestampMs - element.getTimestampMs())
+                        .compareTo(discardTime) < 0) {
+                    threadPool.execute(() -> {
+                        runningThreads.incrementAndGet();
+                        try {
+                            subscription.process(element.getElement());
+                        } finally {
+                            runningThreads.decrementAndGet();
+                        }
+                    });
+                }
+            } catch (RejectedExecutionException e) {
+                try (Jedis jedis = jedisPool.getResource()) {
+                    jedis.lpush(key, value);
+                    LOG.error("Rejected execution, re-enqueued {}",
+                            element.getElement().getIdAsString(), e);
+                } catch (Exception pushE) {
+                    LOG.error("Could not re-enqueue {}", element.getElement().getIdAsString(), e);
+                }
             }
         }
     }
@@ -261,13 +289,16 @@ public class Redisq<T extends Document> implements Queue<T> {
         return names;
     }
 
-    public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit) throws WaitException {
-        Future<Void> f = getFutureForDocumentStateWait(DONE, dummyObject.getIdAsString(), waitTimeout, waitTimeoutUnit);
+    public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit)
+            throws WaitException {
+        Future<Void> f = getFutureForDocumentStateWait(DONE, dummyObject.getIdAsString(),
+                waitTimeout, waitTimeoutUnit);
         push(dummyObject);
         try {
             f.get(waitTimeout, waitTimeoutUnit);
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            throw new WaitException("Could not wait for " + dummyObject.getIdAsString() + " to be done", e);
+            throw new WaitException(
+                    "Could not wait for " + dummyObject.getIdAsString() + " to be done", e);
         }
     }
 }

@@ -34,20 +34,20 @@ public class StateFuture implements Future<Void> {
             @Override
             public void onSubscribe(String channel, int subscribedChannels) {
                 latch.countDown();
-                String state;
-                try (Jedis jedis = jedisPool.getResource()) {
-                    state = jedis.get(names.stateKeyFromId(id));
-                }
-                if (state != null) {
-                    try {
-                        if (Redisq.stateMapper.deserialize(state).getState().equals(targetState)) {
-                            unsubscribe();
-                            LOG.debug("Unsubscribed because status was already as expected {}", id);
-                        }
-                    } catch (DeserializationException e) {
-                        LOG.error("Could not deserialize state for {}", id, e);
-                    }
-                }
+//                String state;
+//                try (Jedis jedis = jedisPool.getResource()) {
+//                    state = jedis.get(names.stateKeyFromId(id));
+//                }
+//                if (state != null) {
+//                    try {
+//                        if (Redisq.stateMapper.deserialize(state).getState().equals(targetState)) {
+//                            unsubscribe();
+//                            LOG.debug("Unsubscribed because status was already as expected {}", id);
+//                        }
+//                    } catch (DeserializationException e) {
+//                        LOG.error("Could not deserialize state for {}", id, e);
+//                    }
+//                }
             }
 
             @Override
@@ -61,6 +61,7 @@ public class StateFuture implements Future<Void> {
                     StateInfo s = Redisq.stateMapper.deserialize(message);
                     if (targetState.equals(s.getState())) {
                         latch.countDown();
+                        LOG.debug("Received expected state, completing {}", channel);
                         unsubscribe();
                     }
                 } catch (DeserializationException e) {
@@ -79,7 +80,21 @@ public class StateFuture implements Future<Void> {
         CompletableFuture<Void> f = CompletableFuture.runAsync(() -> {
             try{
                 try (Jedis jedis = jedisPool.getResource()) {
-                    jedis.subscribe(sub, new Names().stateChannelKeyFromId(id));
+                    String state = jedis.get(names.stateKeyFromId(id));
+                    if (state != null) {
+                        try {
+                            if (Redisq.stateMapper.deserialize(state).getState()
+                                    .equals(targetState)) {
+                                LOG.debug("Unsubscribed because status was already as expected {}", id);
+                                return;
+                            }
+                        } catch (DeserializationException e) {
+                            LOG.error("Could not deserialize state for {}", id, e);
+                        }
+                    }
+                    String stateChannel = new Names().stateChannelKeyFromId(id);
+                    LOG.debug("Waiting for changes to {}", stateChannel);
+                    jedis.subscribe(sub, stateChannel);
                 } finally{
                     latch.countDown();
                 }
@@ -90,6 +105,7 @@ public class StateFuture implements Future<Void> {
         });
         if (!f.isCompletedExceptionally() && !f.isCancelled()) {
             latch.await(timeout, unit);
+            LOG.debug("Subscribed successfully to {}", id);
         } else {
             LOG.error("QueueConsumer ended before expected");
         }

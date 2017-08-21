@@ -7,6 +7,8 @@ import ai.grakn.redisq.consumer.QueueConsumer;
 import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import redis.clients.jedis.Jedis;
+import redis.clients.util.Pool;
 
 interface Queue<T> {
     /**
@@ -26,7 +28,25 @@ interface Queue<T> {
      */
     void pushAndWait(T document, long waitTimeout, TimeUnit waitTimeoutUnit) throws WaitException;
 
+
+    /**
+     * It returns a future that waits for a document to reac a certain state
+     * Note that this works for DONE and FAILED since they are terminal states.
+     * @param state     Desired state
+     * @param id        Id of the document we are watching
+     * @param timeout   How long to wait until failing
+     * @param unit      Unit of the timeout
+     * @return          A future that blocks on the state being equal to the given state
+     * @throws StateFutureInitializationException   Thrown if it fails to subscribe to the state
+     */
     Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException;
+
+
+    /**
+     * @see ai.grakn.redisq.Queue#getFutureForDocumentStateWait(State, String, long, TimeUnit)
+     * Also takes a jedis pool
+     */
+    Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException;
 
     /**
      * Starts the comsumer for this queue. The consumer takes care of the whole lifecycle, so e.g. in the Redisq
@@ -45,6 +65,7 @@ interface Queue<T> {
      * @return
      */
     String getName();
+
 
     /**
      * @param id

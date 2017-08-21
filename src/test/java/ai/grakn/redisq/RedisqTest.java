@@ -5,12 +5,17 @@ import ai.grakn.redisq.exceptions.WaitException;
 import ai.grakn.redisq.util.DummyConsumer;
 import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
+import org.junit.After;
 import org.junit.AfterClass;
+import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisMonitor;
 import redis.clients.jedis.JedisPool;
 import redis.clients.util.Pool;
 import redis.embedded.RedisServer;
@@ -25,10 +30,11 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
 public class RedisqTest {
+
     private static final Logger LOG = LoggerFactory.getLogger(RedisqTest.class);
 
     // Test constants
-    private static final long TIMEOUT = 100;
+    private static final long TIMEOUT = 30;
     private static final TimeUnit UNIT = TimeUnit.SECONDS;
     private static final int PORT = 6382;
     private static final int QUEUES = 5;
@@ -36,20 +42,34 @@ public class RedisqTest {
     private static final String LOCALHOST = "localhost";
     private static final int PRODUCERS = 10;
     private static final int CONSUMERS = 3;
+    private static final int JEDIS_POOL_MAX_TOTAL = 16;
+    private static final int JEDIS_POOL_MAX_WAIT_MILLIS = 5000;
 
     private static RedisServer server;
     private static Pool<Jedis> jedisPool;
 
     @BeforeClass
-    public static void before() throws IOException {
+    public static void beforeClass() throws IOException {
         server = new RedisServer(PORT);
         server.start();
-        jedisPool = new JedisPool(LOCALHOST, PORT);
-        try(Jedis resource = jedisPool.getResource()) {
-            resource.flushAll();
-        }
     }
 
+    @Before
+    public void before() throws IOException {
+        GenericObjectPoolConfig genericObjectPoolConfig = new GenericObjectPoolConfig();
+        genericObjectPoolConfig.setMaxTotal(JEDIS_POOL_MAX_TOTAL);
+        genericObjectPoolConfig.setMaxWaitMillis(JEDIS_POOL_MAX_WAIT_MILLIS);
+        jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
+        try(Jedis resource = jedisPool.getResource()) {
+            resource.flushAll();
+//            Executors.newSingleThreadExecutor().submit( () -> resource.monitor(new JedisMonitor() {
+//                public void onCommand(String command) {
+//                    System.out.println(command);
+//                }
+//            }));
+        }
+
+    }
 
     @Test
     public void whenPush_StateIsDone() throws WaitException, InterruptedException {
@@ -96,10 +116,11 @@ public class RedisqTest {
                     redisq.push(new DummyObject(pid  + "_" +  id));
                     id++;
                 }
+                id = 0;
                 for(int j = 0; j < DOCUMENTS; j++) {
                     String pidid = pid + "_" + id;
                     try {
-                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, TimeUnit.SECONDS).get();
+                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, TimeUnit.SECONDS, jedisPool).get();
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
@@ -111,10 +132,12 @@ public class RedisqTest {
             });
             producers.add(future);
         }
+        Set<Redisq<DummyObject>> consumers = new HashSet<>();
         for(int i = 0; i < CONSUMERS; i++) {
             consumersThreadPool.submit(() -> {
                 Redisq<DummyObject> redisq = getRedisq(sharedQueueName);
                 redisq.startConsumer();
+                consumers.add(redisq);
             });
         }
         producers.forEach(f -> {
@@ -122,6 +145,13 @@ public class RedisqTest {
                 f.get();
                 LOG.debug(f + " completed");
             } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        });
+        consumers.forEach(c -> {
+            try {
+                c.close();
+            } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         });
@@ -161,6 +191,7 @@ public class RedisqTest {
         assertThat(state.isPresent(), is(false));
     }
 
+    @Ignore
     @Test
     public void whenPushMany_StateIsDone() throws InterruptedException, ExecutionException, StateFutureInitializationException {
         Queue<DummyObject> redisq = getStandardRedisq();
@@ -284,8 +315,13 @@ public class RedisqTest {
     }
 
 
+    @After
+    public void after() {
+        jedisPool.close();
+    }
+
     @AfterClass
-    public static void after() {
+    public static void afterClass() {
         jedisPool.close();
         server.stop();
         server = null;

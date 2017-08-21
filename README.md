@@ -7,7 +7,7 @@ A Redisq object represents a queue. A _push_ adds a document to the queue and a 
 A Redis _brpoplpush_ moves the id of the document from a processing queue into an inflight queue and in case of unacknowledged failure
 they are moved back into the processing queue after a timeout.
 
-Documents are objects with an Id and are serialised/deserialised using [Jackson]().
+Documents are objects with an Id and are serialised/deserialised using [Jackson](https://github.com/FasterXML/jackson).
 
 
 ## Quickstart
@@ -16,9 +16,9 @@ Add it as a dependency in Maven as:
 
 ```xml
 <dependency>
-  <groupId>net.greghaines</groupId>
-  <artifactId>jesque</artifactId>
-  <version>2.1.2</version>
+  <groupId>ai.grakn</groupId>
+  <artifactId>redisq</artifactId>
+  <version>0.0.1</version>
 </dependency>
 ```
 
@@ -37,6 +37,7 @@ public class DummyObject implements Document {
 
     // Needed by Jackson
     public DummyObject() {}
+    
 
     public DummyObject(String id) {
         this.id = id;
@@ -77,6 +78,6 @@ Remember to close the queue:
 redisq.close();
 ```
 
-## Usage
+## Advanced Usage
 
-We can have multiple processes working as producers and consumers:
+[TODO - Look at the tests]
