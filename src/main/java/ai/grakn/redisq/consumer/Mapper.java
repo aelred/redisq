@@ -1,4 +1,4 @@
-package ai.grakn.redisq.subscription;
+package ai.grakn.redisq.consumer;
 
 import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.SerializationException;
@@ -8,6 +8,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 
+/**
+ * Utility class that factors Jackson serialise/deserialise logic
+ * @param <T>   Class of the object mapped into Json
+ */
 public class Mapper<T> {
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private JavaType tClass;

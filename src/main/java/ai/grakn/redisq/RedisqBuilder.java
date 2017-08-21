@@ -13,7 +13,7 @@ import java.util.function.Consumer;
 import static java.time.temporal.ChronoUnit.*;
 
 
-public class RedisqBuilder<T extends Idable> {
+public class RedisqBuilder<T extends Document> {
 
     private String name = "redisq_" + Names.getRandomString();
     private Duration timeout = Duration.of(5, SECONDS);
@@ -23,7 +23,7 @@ public class RedisqBuilder<T extends Idable> {
     private ExecutorService threadPool = Executors.newFixedThreadPool(4 );
     private Consumer<T> consumer;
     private Pool<Jedis> jedisPool;
-    private Class<T> klass;
+    private Class<T> documentClass;
     private MetricRegistry metricRegistry = new MetricRegistry();
 
     public RedisqBuilder<T> setName(String name) {
@@ -66,8 +66,8 @@ public class RedisqBuilder<T extends Idable> {
         return this;
     }
 
-    public RedisqBuilder<T> setKlass(Class<T> klass) {
-        this.klass = klass;
+    public RedisqBuilder<T> setDocumentClass(Class<T> documentClass) {
+        this.documentClass = documentClass;
         return this;
     }
 
@@ -77,6 +77,6 @@ public class RedisqBuilder<T extends Idable> {
     }
 
     public Redisq<T> createRedisq() {
-        return new Redisq<>(name, timeout, ttlStateInfo, lockTime, discardTime, consumer, klass, jedisPool, threadPool, metricRegistry);
+        return new Redisq<>(name, timeout, ttlStateInfo, lockTime, discardTime, consumer, documentClass, jedisPool, threadPool, metricRegistry);
     }
 }

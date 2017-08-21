@@ -1,15 +1,19 @@
 package ai.grakn.redisq;
 
+import ai.grakn.redisq.consumer.QueueConsumer;
 import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.SerializationException;
-import ai.grakn.redisq.subscription.Mapper;
-import ai.grakn.redisq.subscription.RedisqSubscription;
-import ai.grakn.redisq.subscription.Subscription;
-import ai.grakn.redisq.subscription.TimedWrap;
+import ai.grakn.redisq.exceptions.StateFutureInitializationException;
+import ai.grakn.redisq.exceptions.WaitException;
+import ai.grakn.redisq.consumer.Mapper;
+import ai.grakn.redisq.consumer.RedisqConsumer;
+import ai.grakn.redisq.consumer.TimedWrap;
 import ai.grakn.redisq.util.Names;
+import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.rholder.retry.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
@@ -27,9 +31,14 @@ import java.util.function.Consumer;
 import static ai.grakn.redisq.State.*;
 import static com.codahale.metrics.MetricRegistry.name;
 
-public class Redisq<T extends Idable> implements Queue<T> {
+public class Redisq<T extends Document> implements Queue<T> {
     private static final Logger LOG = LoggerFactory.getLogger(Redisq.class);
     static final Mapper<StateInfo> stateMapper = new Mapper<>(StateInfo.class);
+    public static final Retryer<Integer> CLOSE_RETRIER = RetryerBuilder.<Integer>newBuilder()
+            .retryIfResult(r -> !(r != null && r == 0))
+            .withWaitStrategy(WaitStrategies.fixedWait(100, TimeUnit.MILLISECONDS))
+            .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
+            .build();
 
     private final String queueName;
     private final String inFlightQueueName;
@@ -44,11 +53,12 @@ public class Redisq<T extends Idable> implements Queue<T> {
     private final AtomicBoolean working = new AtomicBoolean(false);
     private final AtomicInteger runningThreads = new AtomicInteger(0);
     private Duration discardTime;
-    private Subscription<T> subscription;
+    private QueueConsumer<T> subscription;
     private Future<?> mainLoop;
     private Future<?> inFlightLoop;
 
     private final Timer pushTimer;
+    private final Meter serializationErrors;
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime, Duration discardTime,
                   Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
@@ -58,7 +68,7 @@ public class Redisq<T extends Idable> implements Queue<T> {
         this.ttlStateInfo = (int) ttlStateInfo.getSeconds();
         this.lockTime = (int) lockTime.getSeconds();
         this.discardTime = discardTime;
-        this.subscription = new RedisqSubscription<>(consumer, jedisPool, this);
+        this.subscription = new RedisqConsumer<>(consumer, jedisPool, this);
         this.names = new Names();
         this.queueName = names.queueNameFor(name);
         this.inFlightQueueName = names.inFlightQueueNameFor(name);
@@ -67,22 +77,24 @@ public class Redisq<T extends Idable> implements Queue<T> {
         this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory().constructParametricType(TimedWrap.class, klass));
 
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
+        this.serializationErrors = metricRegistry.meter(name(this.getClass(), "serialization_errors"));
     }
 
     @Override
-    public void push(T element) {
+    public void push(T document) {
         long timestampMs = System.currentTimeMillis();
         String serialized;
         String stateSerialized;
         try {
-            serialized = mapper.serialize(new TimedWrap<>(element, timestampMs));
+            serialized = mapper.serialize(new TimedWrap<>(document, timestampMs));
             stateSerialized = stateMapper.serialize(new StateInfo(NEW, timestampMs));
         } catch (SerializationException e) {
-            throw new RuntimeException("Could not serialize element " + element.getIdAsString(), e);
+            serializationErrors.mark();
+            throw new RuntimeException("Could not serialize element " + document.getIdAsString(), e);
         }
         try (Jedis jedis = jedisPool.getResource(); Timer.Context ignored = pushTimer.time();) {
             Transaction transaction = jedis.multi();
-            String id = element.getIdAsString();
+            String id = document.getIdAsString();
             String lockId = names.lockKeyFromId(id);
             transaction.setex(lockId, lockTime, "locked");
             transaction.lpush(queueName, id);
@@ -95,7 +107,7 @@ public class Redisq<T extends Idable> implements Queue<T> {
     }
 
     @Override
-    public void startSubscription() {
+    public void startConsumer() {
         working.set(true);
         mainLoop = Executors.newSingleThreadExecutor().submit(() -> {
             // We keep one resource for the iteration
@@ -110,29 +122,29 @@ public class Redisq<T extends Idable> implements Queue<T> {
         });
     }
 
-
-    public CompletableFuture<Void> subscribeToState(State state, String id, long timeout, TimeUnit unit) throws InterruptedException {
-        return new UpdateChannelSubscription<>(state, id, jedisPool).subscribe(timeout, unit);
+    @Override
+    public Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException {
+        return new StateFuture(state, id, jedisPool, timeout, unit);
     }
 
     private void inflightIteration() {
         try (Jedis jedis = jedisPool.getResource()) {
             List<String> processingElements = jedis.lrange(inFlightQueueName, 0, -1);
             processingElements
-                .forEach(id -> {
-                    String lockId = names.lockKeyFromId(id);
-                    // TODO We might get more than one consumer doing this
-                    Long ttl = jedis.ttl(lockId);
-                    if (ttl == 0  /* TODO check this || ttl == -2 */) {
-                        LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id, lockId, ttl);
-                        // Restore it in the main queue
-                        Transaction multi = jedis.multi();
-                        multi.lrem(inFlightQueueName, 1, id);
-                        multi.lpush(queueName, id);
-                        multi.exec();
-                    }
-                });
-            }
+                    .forEach(id -> {
+                        String lockId = names.lockKeyFromId(id);
+                        // TODO We might get more than one consumer doing this
+                        Long ttl = jedis.ttl(lockId);
+                        if (ttl == 0  /* TODO check this || ttl == -2 */) {
+                            LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id, lockId, ttl);
+                            // Restore it in the main queue
+                            Transaction multi = jedis.multi();
+                            multi.lrem(inFlightQueueName, 1, id);
+                            multi.lpush(queueName, id);
+                            multi.exec();
+                        }
+                    });
+        }
     }
 
     private void iteration() {
@@ -219,12 +231,13 @@ public class Redisq<T extends Idable> implements Queue<T> {
                 try {
                     mainLoop.get();
                     inFlightLoop.get();
-                    while(runningThreads.get() > 0) {
-                        LOG.debug("Still {} threads running", runningThreads.get());
-                        Thread.sleep(100);
+                    try {
+                        CLOSE_RETRIER.call(this.runningThreads::get);
+                    } catch (RetryException e) {
+                        LOG.warn("Closing while some threads are still running");
                     }
                 } catch (ExecutionException e) {
-                    e.printStackTrace();
+                    LOG.error("Error during close", e);
                 }
             }
         }
@@ -240,7 +253,7 @@ public class Redisq<T extends Idable> implements Queue<T> {
     }
 
     @Override
-    public Subscription<T> getSubscription() {
+    public QueueConsumer<T> getConsumer() {
         return subscription;
     }
 
@@ -248,9 +261,13 @@ public class Redisq<T extends Idable> implements Queue<T> {
         return names;
     }
 
-    public void pushAndWait(T dummyObject, long timeout, TimeUnit unit) throws InterruptedException {
-        CompletableFuture<Void> f = subscribeToState(DONE, dummyObject.getIdAsString(), timeout, unit);
+    public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit) throws WaitException {
+        Future<Void> f = getFutureForDocumentStateWait(DONE, dummyObject.getIdAsString(), waitTimeout, waitTimeoutUnit);
         push(dummyObject);
-        f.join();
+        try {
+            f.get(waitTimeout, waitTimeoutUnit);
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            throw new WaitException("Could not wait for " + dummyObject.getIdAsString() + " to be done", e);
+        }
     }
 }

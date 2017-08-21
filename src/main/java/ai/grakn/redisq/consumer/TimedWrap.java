@@ -1,4 +1,4 @@
-package ai.grakn.redisq.subscription;
+package ai.grakn.redisq.consumer;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 

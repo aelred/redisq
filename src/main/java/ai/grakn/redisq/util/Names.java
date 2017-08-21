@@ -7,15 +7,18 @@ public class Names {
 
     private static final Random random = new Random();
 
-    private final static String PREFIX = "redisq:";
+    private static final int NUM_BITS = 130;
+    private static final int RADIX = 32;
 
-    private final static String QUEUE = "queue:";
-    private final static String INFLIGHT = "inflight:";
+    private static final String PREFIX = "redisq:";
 
-    private final static String CONTENT = "content:";
-    private final static String STATE = "state:";
-    private final static String STATE_CHANNEL = "state:channel:";
-    private final static String LOCK = "lock:";
+    private static final String QUEUE = "queue:";
+    private static final String INFLIGHT = "inflight:";
+
+    private static final String CONTENT = "content:";
+    private static final String STATE = "state:";
+    private static final String STATE_CHANNEL = "state:channel:";
+    private static final String LOCK = "lock:";
 
 
     public String queueNameFor(String name) {
@@ -43,7 +46,7 @@ public class Names {
     }
 
     public static String getRandomString() {
-        return new BigInteger(130, random).toString(32);
+        return new BigInteger(NUM_BITS, random).toString(RADIX);
     }
 
     private String encoded(String idAsString) {

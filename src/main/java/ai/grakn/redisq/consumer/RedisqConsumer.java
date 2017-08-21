@@ -1,6 +1,6 @@
-package ai.grakn.redisq.subscription;
+package ai.grakn.redisq.consumer;
 
-import ai.grakn.redisq.Idable;
+import ai.grakn.redisq.Document;
 import ai.grakn.redisq.Redisq;
 import ai.grakn.redisq.State;
 import org.slf4j.Logger;
@@ -14,14 +14,26 @@ import java.util.function.Consumer;
 import static ai.grakn.redisq.State.DONE;
 import static ai.grakn.redisq.State.FAILED;
 
-public class RedisqSubscription<T extends Idable> implements Subscription<T>{
-    private static final Logger LOG = LoggerFactory.getLogger(RedisqSubscription.class);
+/**
+ * TODO: docs
+ *
+ * @param <T>
+ */
+public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
+    private static final Logger LOG = LoggerFactory.getLogger(RedisqConsumer.class);
 
     private Consumer<T> consumer;
     private Pool<Jedis> jedisPool;
     private Redisq<T> tRedisq;
 
-    public RedisqSubscription(Consumer<T> consumer, Pool<Jedis> jedisPool, Redisq<T> tRedisq) {
+    /**
+     * TODO: docs
+     *
+     * @param consumer
+     * @param jedisPool
+     * @param tRedisq
+     */
+    public RedisqConsumer(Consumer<T> consumer, Pool<Jedis> jedisPool, Redisq<T> tRedisq) {
         this.consumer = consumer;
         this.jedisPool = jedisPool;
         this.tRedisq = tRedisq;

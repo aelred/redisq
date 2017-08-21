@@ -1,10 +1,12 @@
 package ai.grakn.redisq;
 
+import ai.grakn.redisq.exceptions.StateFutureInitializationException;
+import ai.grakn.redisq.exceptions.WaitException;
 import ai.grakn.redisq.util.DummyConsumer;
 import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
-import org.junit.After;
-import org.junit.Before;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,10 +17,7 @@ import redis.embedded.RedisServer;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 
 import static ai.grakn.redisq.State.DONE;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -27,17 +26,25 @@ import static org.hamcrest.Matchers.is;
 
 public class RedisqTest {
     private static final Logger LOG = LoggerFactory.getLogger(RedisqTest.class);
+
+    // Test constants
     private static final long TIMEOUT = 100;
     private static final TimeUnit UNIT = TimeUnit.SECONDS;
     private static final int PORT = 6382;
-    private RedisServer server;
-    private Pool<Jedis> jedisPool;
+    private static final int QUEUES = 5;
+    private static final int DOCUMENTS = 10;
+    private static final String LOCALHOST = "localhost";
+    private static final int PRODUCERS = 10;
+    private static final int CONSUMERS = 3;
 
-    @Before
-    public void before() throws IOException {
+    private static RedisServer server;
+    private static Pool<Jedis> jedisPool;
+
+    @BeforeClass
+    public static void before() throws IOException {
         server = new RedisServer(PORT);
         server.start();
-        jedisPool = new JedisPool("localhost", PORT);
+        jedisPool = new JedisPool(LOCALHOST, PORT);
         try(Jedis resource = jedisPool.getResource()) {
             resource.flushAll();
         }
@@ -45,9 +52,9 @@ public class RedisqTest {
 
 
     @Test
-    public void whenPush_StateIsDone() throws InterruptedException {
-        Redisq<DummyObject> redisq = getStandardRedisq();
-        redisq.startSubscription();
+    public void whenPush_StateIsDone() throws WaitException, InterruptedException {
+        Queue<DummyObject> redisq = getStandardRedisq();
+        redisq.startConsumer();
         String someId = "some id";
         redisq.pushAndWait(new DummyObject(someId, 23, new HashMap<>()), TIMEOUT, UNIT);
         assertThat(redisq.getState(someId).get().getState(), equalTo(DONE));
@@ -55,68 +62,134 @@ public class RedisqTest {
     }
 
     @Test
-    public void whenExpired_GoesBackToQueue() throws InterruptedException {
+    public void whenPushReadmeExample_StateIsDone() throws WaitException, InterruptedException {
+        Queue<DummyObject> redisq = new RedisqBuilder<DummyObject>()
+                .setJedisPool(jedisPool)
+                .setName("my_queue")
+                .setConsumer((d) -> System.out.println("I'm consuming " + d.getIdAsString()))
+                .setDocumentClass(DummyObject.class)
+                .createRedisq();
+        redisq.startConsumer();
+        String someId = "some id";
+        redisq.pushAndWait(new DummyObject(someId, 23, new HashMap<>()), TIMEOUT, UNIT);
+        assertThat(redisq.getState(someId).get().getState(), equalTo(DONE));
+        redisq.close();
+    }
+
+    @Test
+    public void whenProducersAndConsumers_AllDocumentsAreProcessed() throws WaitException, InterruptedException {
+        ExecutorService producersThreadPool = Executors.newFixedThreadPool(PRODUCERS);
+        ExecutorService consumersThreadPool = Executors.newFixedThreadPool(CONSUMERS);
+        String sharedQueueName = "prod_con_example_queue";
+        Set<Future> producers = new HashSet<>();
+        for(int i = 0; i < PRODUCERS; i++) {
+            final int pid = i;
+            Future<Void> future = producersThreadPool.submit(() -> {
+                int id = 0;
+                Redisq<DummyObject> redisq =  new RedisqBuilder<DummyObject>()
+                        .setName(sharedQueueName)
+                        .setJedisPool(jedisPool)
+                        .setDocumentClass(DummyObject.class)
+                        .createRedisq();
+                // Don't start subscription
+                for(int j = 0; j < DOCUMENTS; j++) {
+                    redisq.push(new DummyObject(pid  + "_" +  id));
+                    id++;
+                }
+                for(int j = 0; j < DOCUMENTS; j++) {
+                    String pidid = pid + "_" + id;
+                    try {
+                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, TimeUnit.SECONDS).get();
+                        LOG.debug("Wait for {} succeeded", pidid);
+                    } catch (Exception e) {
+                        LOG.error("Wait for {} failed", pidid, e);
+                        assertThat("Errors while waiting for state", false);
+                    }
+                }
+                redisq.close();
+                return null;
+            });
+            producers.add(future);
+        }
+        for(int i = 0; i < CONSUMERS; i++) {
+            consumersThreadPool.submit(() -> {
+                Redisq<DummyObject> redisq = getRedisq(sharedQueueName);
+                redisq.startConsumer();
+            });
+        }
+        producers.forEach(f -> {
+            try {
+                f.get();
+                LOG.debug(f + " completed");
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        });
+    }
+
+    @Test
+    public void whenExpired_GoesBackToQueue() throws WaitException, InterruptedException, ExecutionException {
         Redisq<DummyObject> redisq = getStandardRedisq();
         String someId = "some id";
         redisq.push(new DummyObject(someId, 23, new HashMap<>()));
         String lockId = redisq.getNames().lockKeyFromId(someId);
         try(Jedis resource = jedisPool.getResource()) {
-            resource.setex(lockId,  15, "locked");
+            resource.setex(lockId,  1, "locked");
             resource.brpoplpush(redisq.getNames().queueNameFor(redisq.getName()),  redisq.getNames().inFlightQueueNameFor(redisq.getName()), 1);
         }
-        CompletableFuture<Void> f = redisq.subscribeToState(DONE, someId, 30, TimeUnit.SECONDS);
-        redisq.startSubscription();
-        f.join();
+        Future<Void> f = redisq.getFutureForDocumentStateWait(DONE, someId, 5, TimeUnit.SECONDS);
+        redisq.startConsumer();
+        f.get();
         assertThat(redisq.getState(someId).get().getState(), equalTo(DONE));
         redisq.close();
     }
 
     @Test(expected = TimeoutException.class)
-    public void whenSubscribeToNonExistingId_Timeout() throws InterruptedException, TimeoutException, ExecutionException {
-        Redisq<DummyObject> redisq = getStandardRedisq();
-        redisq.startSubscription();
+    public void whenSubscribeToNonExistingId_Timeout() throws WaitException, InterruptedException, TimeoutException, ExecutionException {
+        Queue<DummyObject> redisq = getStandardRedisq();
+        redisq.startConsumer();
         String someId = "some id";
-        CompletableFuture<Void> sub = redisq.subscribeToState(DONE, someId, TIMEOUT, UNIT);
+        Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
         sub.get(1, TimeUnit.SECONDS);
     }
 
     @Test
     public void whenGetNonExistingState_StateNotPresent() throws InterruptedException, TimeoutException, ExecutionException {
-        Redisq<DummyObject> redisq = getStandardRedisq();
-        redisq.startSubscription();
+        Queue<DummyObject> redisq = getStandardRedisq();
+        redisq.startConsumer();
         Optional<StateInfo> state = redisq.getState("12345");
         assertThat(state.isPresent(), is(false));
     }
 
     @Test
-    public void whenPushMany_StateIsDone() throws InterruptedException {
-        Redisq<DummyObject> redisq = getStandardRedisq();
-        redisq.startSubscription();
-        Map<String, CompletableFuture<Void>> ss = new HashMap<>();
-        for(int i = 0; i < 100; i++) {
+    public void whenPushMany_StateIsDone() throws InterruptedException, ExecutionException, StateFutureInitializationException {
+        Queue<DummyObject> redisq = getStandardRedisq();
+        redisq.startConsumer();
+        Map<String, Future<Void>> ss = new HashMap<>();
+        for(int i = 0; i < DOCUMENTS; i++) {
             String someId = Names.getRandomString();
-            CompletableFuture<Void> sub = redisq.subscribeToState(DONE, someId, TIMEOUT, UNIT);
+            Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
             redisq.push(new DummyObject(someId, 23, new HashMap<>()));
             ss.put(someId, sub);
         }
         for(String id : ss.keySet()) {
-            ss.get(id).join();
+            ss.get(id).get();
             assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
         }
         redisq.close();
     }
 
     @Test
-    public void whenPushManyOnDifferentQueuesAndClose_StateIsDone() throws InterruptedException {
-        Map<String, Map<String, CompletableFuture<Void>>> idsAndCompletable = new HashMap<>();
-        for(int j = 0; j < 10; j++) {
+    public void whenPushManyOnDifferentQueuesAndClose_StateIsDone() throws InterruptedException, StateFutureInitializationException {
+        Map<String, Map<String, Future<Void>>> idsAndCompletable = new HashMap<>();
+        for(int j = 0; j < QUEUES; j++) {
             String someQueueId = Names.getRandomString();
-            Redisq<DummyObject> redisq = getRedisq(someQueueId);
-            HashMap<String, CompletableFuture<Void>> ids = new HashMap<>();
-            redisq.startSubscription();
-            for (int i = 0; i < 100; i++) {
+            Queue<DummyObject> redisq = getRedisq(someQueueId);
+            HashMap<String, Future<Void>> ids = new HashMap<>();
+            redisq.startConsumer();
+            for (int i = 0; i < DOCUMENTS; i++) {
                 String id = Names.getRandomString();
-                CompletableFuture<Void> sub = redisq.subscribeToState(DONE, id, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, id, TIMEOUT, UNIT);
                 redisq.push(new DummyObject(id, 23, new HashMap<>()));
                 ids.put(id, sub);
             }
@@ -124,11 +197,14 @@ public class RedisqTest {
             redisq.close();
         }
         idsAndCompletable.forEach((queueName, idMap) -> {
-            Redisq<DummyObject> redisq = getRedisq(queueName);
-            redisq.startSubscription();
+            Queue<DummyObject> redisq = getRedisq(queueName);
+            redisq.startConsumer();
             for(String id : idMap.keySet()) {
-                System.out.println(id);
-                idMap.get(id).join();
+                try {
+                    idMap.get(id).get();
+                } catch (InterruptedException | ExecutionException e) {
+                    e.printStackTrace();
+                }
                 assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
             }
             try {
@@ -140,20 +216,20 @@ public class RedisqTest {
     }
 
     @Test
-    public void whenPushManyQueuesAndClose_StateIsDone() throws InterruptedException {
-        Map<String, CompletableFuture<Void>> ss = new HashMap<>();
+    public void whenPushManyQueuesAndClose_StateIsDone() throws InterruptedException, ExecutionException, StateFutureInitializationException {
+        Map<String, Future<Void>> ss = new HashMap<>();
         String qname = "qname";
-        for(int j = 0; j < 5; j++) {
-            Redisq<DummyObject> redisq = getRedisq(qname);
-            redisq.startSubscription();
-            for (int i = 0; i < 10; i++) {
+        for(int j = 0; j < QUEUES; j++) {
+            Queue<DummyObject> redisq = getRedisq(qname);
+            redisq.startConsumer();
+            for (int i = 0; i < DOCUMENTS; i++) {
                 String someId = Names.getRandomString();
-                CompletableFuture<Void> sub = redisq.subscribeToState(DONE, someId, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
                 redisq.push(new DummyObject(someId, 23, new HashMap<>()));
                 ss.put(someId, sub);
             }
             for(String id : ss.keySet()) {
-                ss.get(id).join();
+                ss.get(id).get();
                 assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
             }
             redisq.close();
@@ -161,30 +237,30 @@ public class RedisqTest {
     }
 
     @Test
-    public void testPushManyWithClosuresAfter() throws InterruptedException {
-        Map<String, CompletableFuture<Void>> ss = new HashMap<>();
+    public void whenPushAndClose_StateIsDone() throws InterruptedException, ExecutionException, StateFutureInitializationException {
+        Map<String, Future<Void>> ss = new HashMap<>();
         String qname = "qname";
-        for(int j = 0; j < 5; j++) {
-            Redisq<DummyObject> redisq = getRedisq(qname);
-            redisq.startSubscription();
-            for (int i = 0; i < 10; i++) {
+        for(int j = 0; j < QUEUES; j++) {
+            Queue<DummyObject> redisq = getRedisq(qname);
+            redisq.startConsumer();
+            for (int i = 0; i < DOCUMENTS; i++) {
                 String someId = Names.getRandomString();
                 LOG.debug("Processing {}", someId);
-                CompletableFuture<Void> sub = redisq.subscribeToState(DONE, someId, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
                 LOG.debug("Subscribed {}", someId);
                 redisq.push(new DummyObject(someId, 23, new HashMap<>()));
                 LOG.debug("Pushed {}", someId);
                 ss.put(someId, sub);
             }
-            // The problem here is that many subscription pulls can happen after the close
-            // So there are subscription still pending
+            // The problem here is that many consumer pulls can happen after the close
+            // So there are consumer still pending
             // Since everything is closed, we cannot even re-enqueue these
             redisq.close();
         }
-        Redisq<DummyObject> redisq = getRedisq(qname);
-        redisq.startSubscription();
+        Queue<DummyObject> redisq = getRedisq(qname);
+        redisq.startConsumer();
         for(String id : ss.keySet()) {
-            ss.get(id).join();
+            ss.get(id).get();
             assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
         }
         redisq.close();
@@ -194,7 +270,7 @@ public class RedisqTest {
         return new RedisqBuilder<DummyObject>()
                 .setJedisPool(jedisPool)
                 .setConsumer(new DummyConsumer<>())
-                .setKlass(DummyObject.class)
+                .setDocumentClass(DummyObject.class)
                 .createRedisq();
     }
 
@@ -203,13 +279,13 @@ public class RedisqTest {
                 .setJedisPool(jedisPool)
                 .setName(name)
                 .setConsumer(new DummyConsumer<>())
-                .setKlass(DummyObject.class)
+                .setDocumentClass(DummyObject.class)
                 .createRedisq();
     }
 
 
-    @After
-    public void after() {
+    @AfterClass
+    public static void after() {
         jedisPool.close();
         server.stop();
         server = null;

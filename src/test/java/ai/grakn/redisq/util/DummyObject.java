@@ -1,12 +1,13 @@
 package ai.grakn.redisq.util;
 
-import ai.grakn.redisq.Idable;
+import ai.grakn.redisq.Document;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.HashMap;
 import java.util.Map;
 
-public class DummyObject implements Idable {
+public class DummyObject implements Document {
     @JsonProperty
     private String id;
     @JsonProperty
@@ -15,6 +16,10 @@ public class DummyObject implements Idable {
     private Map<String, Integer> aMap;
 
     public DummyObject() {
+    }
+
+    public DummyObject(String id) {
+        this(id, -1, new HashMap<>());
     }
 
     public DummyObject(String id, long dumCoefficient, Map<String, Integer> aMap) {
