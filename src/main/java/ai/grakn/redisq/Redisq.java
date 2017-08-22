@@ -222,6 +222,14 @@ public class Redisq<T extends Document> implements Queue<T> {
         }
     }
 
+    @Override
+    public void setState(String id, State state) {
+        long timestampMs = System.currentTimeMillis();
+        try (Jedis jedis = jedisPool.getResource()) {
+            setState(jedis, timestampMs, id, state);
+        }
+    }
+
     public void setState(Jedis jedis, long timestampMs, String id, State state) {
         String stateSerialized;
         StateInfo stateInfo = new StateInfo(state, timestampMs);
