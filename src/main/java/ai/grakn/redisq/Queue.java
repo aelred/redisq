@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 import redis.clients.jedis.Jedis;
 import redis.clients.util.Pool;
 
-interface Queue<T> {
+public interface Queue<T> {
     /**
      * Put a document in the queue
      * @param document  Document to be pushed to the queue. It must be serialisable.
