@@ -8,6 +8,7 @@ import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
+import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -227,6 +228,8 @@ public class RedisqTest {
             ss.get(id).get();
             assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
         }
+        assertThat(redisq.getStates().count(), equalTo((long) DOCUMENTS));
+        redisq.getStates().forEach(s -> assertThat(s.get().getState(), equalTo(DONE)));
         redisq.close();
     }
 

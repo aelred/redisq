@@ -7,6 +7,7 @@ import ai.grakn.redisq.consumer.QueueConsumer;
 import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import redis.clients.jedis.Jedis;
 import redis.clients.util.Pool;
 
@@ -57,33 +58,51 @@ public interface Queue<T> {
 
 
     /**
-     * @throws InterruptedException
+     * Sets a flag and waits for all the running threads to terminate
+     * @throws InterruptedException if the operation is interrupted
      */
     void close() throws InterruptedException;
 
     /**
-     * @return
+     * Getter for the name of the queue
+     * @return  The name of the queue
      */
     String getName();
 
 
     /**
-     * Set the state
-     * @param id
-     * @param state
+     * @see ai.grakn.redisq.Queue#setState(String, State, String)
      */
-    void setState(String id, State state);
+    default void setState(String id, State state) {
+        setState(id, state, "");
+    }
 
+    /**
+     * Sets a state "manually"
+     * @param id        Id of the document
+     * @param state     State (e.g. DONE, FAILED)
+     * @param info      Extra info to be stored (e.g. the exception message for the failure)
+     */
     void setState(String id, State state, String info);
 
     /**
-     * @param id
-     * @return
+     * Retrieves the state for the given id
+     * @param id        Id of the document
+     * @return          Current state of the document. Empty if not available
      */
     Optional<StateInfo> getState(String id);
 
     /**
-     * @return
+     * Retrieves all the states. It gives a snapshot of the keys  at the time the method is called.
+     * If the returned state is empty it means it's not available any longer (the key was
+     * available when first invoked though). It returns null when finished.
+     * @return          A stream with all the states currently stored. The stream is null if finished.
+     */
+    Stream<Optional<StateInfo>> getStates();
+
+    /**
+     * Getter for the consumer being used
+     * @return          The comsumer
      */
     QueueConsumer<T> getConsumer();
 }

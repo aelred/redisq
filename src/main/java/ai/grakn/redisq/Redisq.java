@@ -14,6 +14,9 @@ import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.rholder.retry.*;
+import java.util.Iterator;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
@@ -223,11 +226,6 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     @Override
-    public void setState(String id, State state) {
-        setState(id, state, "");
-    }
-
-    @Override
     public void setState(String id, State state, String info) {
         long timestampMs = System.currentTimeMillis();
         try (Jedis jedis = jedisPool.getResource()) {
@@ -249,18 +247,17 @@ public class Redisq<T extends Document> implements Queue<T> {
 
     @Override
     public Optional<StateInfo> getState(String id) {
+        String key = names.stateKeyFromId(id);
+        return getStateInfoFromRedisKey(key);
+    }
+
+    @Override
+    public Stream<Optional<StateInfo>> getStates() {
+        Stream<String> keys;
         try (Jedis jedis = jedisPool.getResource()) {
-            try {
-                String element = jedis.get(names.stateKeyFromId(id));
-                if (element == null) {
-                    return Optional.empty();
-                } else {
-                    return Optional.of(stateMapper.deserialize(element));
-                }
-            } catch (DeserializationException e) {
-                throw new RuntimeException("Could not deserialize state info for " + id, e);
-            }
+            keys = jedis.keys(names.stateKeyFromId("*")).stream();
         }
+        return keys.map(this::getStateInfoFromRedisKey);
     }
 
     @Override
@@ -298,10 +295,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         return subscription;
     }
 
-    public Names getNames() {
-        return names;
-    }
-
+    @Override
     public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit)
             throws WaitException {
         Future<Void> f = getFutureForDocumentStateWait(DONE, dummyObject.getIdAsString(),
@@ -312,6 +306,25 @@ public class Redisq<T extends Document> implements Queue<T> {
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
             throw new WaitException(
                     "Could not wait for " + dummyObject.getIdAsString() + " to be done", e);
+        }
+    }
+
+    public Names getNames() {
+        return names;
+    }
+
+    private Optional<StateInfo> getStateInfoFromRedisKey(String key) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            try {
+                String element = jedis.get(key);
+                if (element == null) {
+                    return Optional.empty();
+                } else {
+                    return Optional.of(stateMapper.deserialize(element));
+                }
+            } catch (DeserializationException e) {
+                throw new RuntimeException("Could not deserialize state info for " + key, e);
+            }
         }
     }
 }
