@@ -15,18 +15,22 @@ Documents are objects with an Id and are serialised/deserialised using [Jackson]
 Add it as a dependency in Maven as:
 
 ```xml
-<dependency>
-  <groupId>ai.grakn</groupId>
-  <artifactId>redisq</artifactId>
-  <version>0.0.1</version>
-</dependency>
+<dependencies>
+    <dependency>
+        <groupId>ai.grakn</groupId>
+        <artifactId>redisq</artifactId>
+        <version>0.0.1</version>
+    </dependency> 
+</dependencies>
+
+<repositories>
+    <repository>
+        <id>development-snapshots</id>
+        <url>https://maven.grakn.ai/content/repositories/snapshots/</url>
+    </repository>
+</repositories>
 ```
 
-or in Gradle as:
-
-```groovy
-
-```
 
 First we need to create a serializable class with an id.
 
