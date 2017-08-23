@@ -14,8 +14,6 @@ import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.rholder.retry.*;
-import java.util.Iterator;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -252,12 +250,15 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     @Override
-    public Stream<Optional<StateInfo>> getStates() {
+    public Stream<Optional<ExtendedStateInfo>> getStates() {
         Stream<String> keys;
         try (Jedis jedis = jedisPool.getResource()) {
             keys = jedis.keys(names.stateKeyFromId("*")).stream();
         }
-        return keys.map(this::getStateInfoFromRedisKey);
+        return keys.map(key -> {
+            Optional<StateInfo> stateInfoFromRedisKey = getStateInfoFromRedisKey(key);
+            return stateInfoFromRedisKey.map(stateInfo -> new ExtendedStateInfo(key, stateInfo));
+        });
     }
 
     @Override

@@ -229,7 +229,7 @@ public class RedisqTest {
             assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
         }
         assertThat(redisq.getStates().count(), equalTo((long) DOCUMENTS));
-        redisq.getStates().forEach(s -> assertThat(s.get().getState(), equalTo(DONE)));
+        redisq.getStates().forEach(s -> assertThat(s.get().getStateInfo().getState(), equalTo(DONE)));
         redisq.close();
     }
 

@@ -98,7 +98,7 @@ public interface Queue<T> {
      * available when first invoked though). It returns null when finished.
      * @return          A stream with all the states currently stored. The stream is null if finished.
      */
-    Stream<Optional<StateInfo>> getStates();
+    Stream<Optional<ExtendedStateInfo>> getStates();
 
     /**
      * Getter for the consumer being used
