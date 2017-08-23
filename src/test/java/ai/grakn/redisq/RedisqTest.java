@@ -1,10 +1,12 @@
 package ai.grakn.redisq;
 
+import static ai.grakn.redisq.State.FAILED;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.WaitException;
 import ai.grakn.redisq.util.DummyConsumer;
 import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -12,6 +14,7 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
+import org.mockito.internal.matchers.Null;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
@@ -35,7 +38,7 @@ public class RedisqTest {
 
     // Test constants
     private static final long TIMEOUT = 30;
-    private static final TimeUnit UNIT = TimeUnit.SECONDS;
+    private static final TimeUnit UNIT = SECONDS;
     private static final int PORT = 6382;
     private static final int QUEUES = 5;
     private static final int DOCUMENTS = 10;
@@ -82,6 +85,26 @@ public class RedisqTest {
     }
 
     @Test
+    public void whenPushError_StateIsFailed()
+            throws WaitException, InterruptedException, TimeoutException, ExecutionException {
+        final String message = "Message";
+        Queue<DummyObject> redisq = new RedisqBuilder<DummyObject>()
+                .setJedisPool(jedisPool)
+                .setName("my_queue")
+                .setConsumer((d) -> {
+                    throw new RuntimeException(message);})
+                .setDocumentClass(DummyObject.class)
+                .createRedisq();
+        redisq.startConsumer();
+        String someId = "some id";
+        redisq.push(new DummyObject(someId, 23, new HashMap<>()));
+        redisq.getFutureForDocumentStateWait(FAILED, someId, 1, SECONDS).get(3, SECONDS);
+        assertThat(redisq.getState(someId).get().getState(), equalTo(FAILED));
+        assertThat(redisq.getState(someId).get().getInfo(), equalTo(message));
+        redisq.close();
+    }
+
+    @Test
     public void whenPushReadmeExample_StateIsDone() throws WaitException, InterruptedException {
         Queue<DummyObject> redisq = new RedisqBuilder<DummyObject>()
                 .setJedisPool(jedisPool)
@@ -105,7 +128,6 @@ public class RedisqTest {
         for(int i = 0; i < PRODUCERS; i++) {
             final int pid = i;
             Future<Void> future = producersThreadPool.submit(() -> {
-                int id = 0;
                 Redisq<DummyObject> redisq =  new RedisqBuilder<DummyObject>()
                         .setName(sharedQueueName)
                         .setJedisPool(jedisPool)
@@ -113,14 +135,12 @@ public class RedisqTest {
                         .createRedisq();
                 // Don't start consumer
                 for(int j = 0; j < DOCUMENTS; j++) {
-                    redisq.push(new DummyObject(pid  + "_" +  id));
-                    id++;
+                    redisq.push(new DummyObject(pid  + "_" +  j));
                 }
-                id = 0;
                 for(int j = 0; j < DOCUMENTS; j++) {
-                    String pidid = pid + "_" + id;
+                    String pidid = pid + "_" + j;
                     try {
-                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, TimeUnit.SECONDS, jedisPool).get();
+                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, SECONDS, jedisPool).get();
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
@@ -167,7 +187,7 @@ public class RedisqTest {
             resource.setex(lockId,  1, "locked");
             resource.brpoplpush(redisq.getNames().queueNameFor(redisq.getName()),  redisq.getNames().inFlightQueueNameFor(redisq.getName()), 1);
         }
-        Future<Void> f = redisq.getFutureForDocumentStateWait(DONE, someId, 5, TimeUnit.SECONDS);
+        Future<Void> f = redisq.getFutureForDocumentStateWait(DONE, someId, 5, SECONDS);
         redisq.startConsumer();
         f.get();
         assertThat(redisq.getState(someId).get().getState(), equalTo(DONE));
@@ -180,7 +200,7 @@ public class RedisqTest {
         redisq.startConsumer();
         String someId = "some id";
         Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
-        sub.get(1, TimeUnit.SECONDS);
+        sub.get(1, SECONDS);
     }
 
     @Test

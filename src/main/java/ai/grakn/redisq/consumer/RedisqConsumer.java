@@ -43,17 +43,17 @@ public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
     public void process(T element) {
         try {
             consumer
-                    .andThen(e -> updateState(e, DONE))
+                    .andThen(e -> updateState(e, DONE, ""))
                     .accept(element);
         } catch (Exception e) {
-            updateState(element, FAILED);
+            updateState(element, FAILED, e.getMessage());
         }
     }
 
-    private void updateState(T element, State state) {
+    private void updateState(T element, State state, String info) {
          try(Jedis jedis = jedisPool.getResource()) {
             String id = element.getIdAsString();
-            tRedisq.setState(jedis, System.currentTimeMillis(), id, state);
+            tRedisq.setState(jedis, System.currentTimeMillis(), id, state, info);
             jedis.del(tRedisq.getNames().lockKeyFromId(id));
         } catch (JedisConnectionException e) {
             LOG.error("Pool is full  or terminated. Active: {}, idle: {}", jedisPool.getNumActive(), jedisPool.getNumIdle());

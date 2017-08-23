@@ -91,7 +91,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         String stateSerialized;
         try {
             serialized = mapper.serialize(new TimedWrap<>(document, timestampMs));
-            stateSerialized = stateMapper.serialize(new StateInfo(NEW, timestampMs));
+            stateSerialized = stateMapper.serialize(new StateInfo(NEW, timestampMs, ""));
         } catch (SerializationException e) {
             serializationErrors.mark();
             throw new RuntimeException("Could not serialize element " + document.getIdAsString(),
@@ -182,7 +182,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 if (state.isPresent() && !state.get().getState().equals(NEW)) {
                     LOG.warn("State already present for {}: {}", id, state.get().getState());
                 }
-                setState(jedis, timestampMs, id, PROCESSING);
+                setState(jedis, timestampMs, id, PROCESSING, "");
                 key = names.contentKeyFromId(id);
                 value = jedis.get(key);
             } else {
@@ -224,15 +224,20 @@ public class Redisq<T extends Document> implements Queue<T> {
 
     @Override
     public void setState(String id, State state) {
+        setState(id, state, "");
+    }
+
+    @Override
+    public void setState(String id, State state, String info) {
         long timestampMs = System.currentTimeMillis();
         try (Jedis jedis = jedisPool.getResource()) {
-            setState(jedis, timestampMs, id, state);
+            setState(jedis, timestampMs, id, state, info);
         }
     }
 
-    public void setState(Jedis jedis, long timestampMs, String id, State state) {
+    public void setState(Jedis jedis, long timestampMs, String id, State state, String info) {
         String stateSerialized;
-        StateInfo stateInfo = new StateInfo(state, timestampMs);
+        StateInfo stateInfo = new StateInfo(state, timestampMs, info);
         try {
             stateSerialized = stateMapper.serialize(stateInfo);
         } catch (SerializationException e) {

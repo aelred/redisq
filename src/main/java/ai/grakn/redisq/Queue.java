@@ -74,6 +74,8 @@ public interface Queue<T> {
      */
     void setState(String id, State state);
 
+    void setState(String id, State state, String info);
+
     /**
      * @param id
      * @return
