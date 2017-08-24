@@ -5,6 +5,7 @@ import ai.grakn.redisq.exceptions.WaitException;
 import ai.grakn.redisq.consumer.QueueConsumer;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -40,14 +41,14 @@ public interface Queue<T> {
      * @return          A future that blocks on the state being equal to the given state
      * @throws StateFutureInitializationException   Thrown if it fails to subscribe to the state
      */
-    Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException;
+    Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException;
 
 
     /**
-     * @see ai.grakn.redisq.Queue#getFutureForDocumentStateWait(State, String, long, TimeUnit)
+     * @see ai.grakn.redisq.Queue#getFutureForDocumentStateWait(Set, String, long, TimeUnit)
      * Also takes a jedis pool
      */
-    Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException;
+    Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout, TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException;
 
     /**
      * Starts the comsumer for this queue. The consumer takes care of the whole lifecycle, so e.g. in the Redisq
@@ -95,7 +96,7 @@ public interface Queue<T> {
     /**
      * Retrieves all the states. It gives a snapshot of the keys  at the time the method is called.
      * If the returned state is empty it means it's not available any longer (the key was
-     * available when first invoked though). It returns null when finished.
+     * available when first invoked though).
      * @return          A stream with all the states currently stored. The stream is null if finished.
      */
     Stream<Optional<ExtendedStateInfo>> getStates();

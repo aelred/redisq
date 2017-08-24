@@ -3,6 +3,7 @@ package ai.grakn.redisq;
 import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.util.Names;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
@@ -18,13 +19,13 @@ public class StateFuture implements Future<Void> {
     private final CompletableFuture<Void> subscription;
     private final Names names;
 
-    private State targetState;
+    private Set<State> targetState;
     private String id;
     private final Pool<Jedis> jedisPool;
     private final CountDownLatch latch = new CountDownLatch(1);
 
 
-    public StateFuture(State targetState, String id, Pool<Jedis> jedisPool, long subscriptionWaitTimeout, TimeUnit subscriptionWaitUnit) throws StateFutureInitializationException {
+    public StateFuture(Set<State> targetState, String id, Pool<Jedis> jedisPool, long subscriptionWaitTimeout, TimeUnit subscriptionWaitUnit) throws StateFutureInitializationException {
         this.targetState = targetState;
         this.id = id;
         this.jedisPool = jedisPool;
@@ -59,7 +60,7 @@ public class StateFuture implements Future<Void> {
             public void onMessage(String channel, String message) {
                 try {
                     StateInfo s = Redisq.stateMapper.deserialize(message);
-                    if (targetState.equals(s.getState())) {
+                    if (targetState.contains(s.getState())) {
                         latch.countDown();
                         LOG.debug("Received expected state, completing {}", channel);
                         unsubscribe();
@@ -83,8 +84,7 @@ public class StateFuture implements Future<Void> {
                     String state = jedis.get(names.stateKeyFromId(id));
                     if (state != null) {
                         try {
-                            if (Redisq.stateMapper.deserialize(state).getState()
-                                    .equals(targetState)) {
+                            if (targetState.contains(Redisq.stateMapper.deserialize(state).getState())) {
                                 LOG.debug("Unsubscribed because status was already as expected {}", id);
                                 return;
                             }

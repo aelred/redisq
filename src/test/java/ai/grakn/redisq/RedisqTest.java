@@ -6,6 +6,7 @@ import ai.grakn.redisq.exceptions.WaitException;
 import ai.grakn.redisq.util.DummyConsumer;
 import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
+import com.google.common.collect.ImmutableSet;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.hamcrest.Matchers;
@@ -99,7 +100,7 @@ public class RedisqTest {
         redisq.startConsumer();
         String someId = "some id";
         redisq.push(new DummyObject(someId, 23, new HashMap<>()));
-        redisq.getFutureForDocumentStateWait(FAILED, someId, 1, SECONDS).get(3, SECONDS);
+        redisq.getFutureForDocumentStateWait(ImmutableSet.of(FAILED), someId, 1, SECONDS).get(3, SECONDS);
         assertThat(redisq.getState(someId).get().getState(), equalTo(FAILED));
         assertThat(redisq.getState(someId).get().getInfo(), equalTo(message));
         redisq.close();
@@ -135,13 +136,20 @@ public class RedisqTest {
                         .setDocumentClass(DummyObject.class)
                         .createRedisq();
                 // Don't start consumer
+                List<Future<Void>> subscriptions = new ArrayList<>();
                 for(int j = 0; j < DOCUMENTS; j++) {
-                    redisq.push(new DummyObject(pid  + "_" +  j));
+                    // Note how we are making the subbscriptions before the push.
+                    // Otherwise we might lose the state change
+                    Future<Void> futureForDocumentStateWait = redisq
+                            .getFutureForDocumentStateWait(ImmutableSet.of(DONE),  makePid(pid, j), 1,
+                                    SECONDS, jedisPool);
+                    subscriptions.add(futureForDocumentStateWait);
+                    redisq.push(new DummyObject(makePid(pid, j)));
                 }
                 for(int j = 0; j < DOCUMENTS; j++) {
-                    String pidid = pid + "_" + j;
+                    String pidid = makePid(pid, j);
                     try {
-                        redisq.getFutureForDocumentStateWait(DONE, pidid, 1, SECONDS, jedisPool).get();
+                        subscriptions.get(j).get();
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
@@ -178,6 +186,10 @@ public class RedisqTest {
         });
     }
 
+    private String makePid(int pid, int j) {
+        return pid + "_" + j;
+    }
+
     @Test
     public void whenExpired_GoesBackToQueue() throws WaitException, InterruptedException, ExecutionException {
         Redisq<DummyObject> redisq = getStandardRedisq();
@@ -188,7 +200,7 @@ public class RedisqTest {
             resource.setex(lockId,  1, "locked");
             resource.brpoplpush(redisq.getNames().queueNameFor(redisq.getName()),  redisq.getNames().inFlightQueueNameFor(redisq.getName()), 1);
         }
-        Future<Void> f = redisq.getFutureForDocumentStateWait(DONE, someId, 5, SECONDS);
+        Future<Void> f = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), someId, 5, SECONDS);
         redisq.startConsumer();
         f.get();
         assertThat(redisq.getState(someId).get().getState(), equalTo(DONE));
@@ -200,7 +212,7 @@ public class RedisqTest {
         Queue<DummyObject> redisq = getStandardRedisq();
         redisq.startConsumer();
         String someId = "some id";
-        Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
+        Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), someId, TIMEOUT, UNIT);
         sub.get(1, SECONDS);
     }
 
@@ -220,15 +232,16 @@ public class RedisqTest {
         Map<String, Future<Void>> ss = new HashMap<>();
         for(int i = 0; i < DOCUMENTS; i++) {
             String someId = Names.getRandomString();
-            Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
+            Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), someId, TIMEOUT, UNIT);
             redisq.push(new DummyObject(someId, 23, new HashMap<>()));
             ss.put(someId, sub);
         }
         for(String id : ss.keySet()) {
+            LOG.debug("Consuming {}", id);
             ss.get(id).get();
             assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
         }
-        assertThat(redisq.getStates().count(), equalTo((long) DOCUMENTS));
+        assertThat(redisq.getStates().filter(Optional::isPresent).count(), equalTo((long) DOCUMENTS));
         redisq.getStates().forEach(s -> assertThat(s.get().getStateInfo().getState(), equalTo(DONE)));
         redisq.close();
     }
@@ -243,7 +256,7 @@ public class RedisqTest {
             redisq.startConsumer();
             for (int i = 0; i < DOCUMENTS; i++) {
                 String id = Names.getRandomString();
-                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, id, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), id, TIMEOUT, UNIT);
                 redisq.push(new DummyObject(id, 23, new HashMap<>()));
                 ids.put(id, sub);
             }
@@ -278,7 +291,7 @@ public class RedisqTest {
             redisq.startConsumer();
             for (int i = 0; i < DOCUMENTS; i++) {
                 String someId = Names.getRandomString();
-                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), someId, TIMEOUT, UNIT);
                 redisq.push(new DummyObject(someId, 23, new HashMap<>()));
                 ss.put(someId, sub);
             }
@@ -300,7 +313,7 @@ public class RedisqTest {
             for (int i = 0; i < DOCUMENTS; i++) {
                 String someId = Names.getRandomString();
                 LOG.debug("Processing {}", someId);
-                Future<Void> sub = redisq.getFutureForDocumentStateWait(DONE, someId, TIMEOUT, UNIT);
+                Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), someId, TIMEOUT, UNIT);
                 LOG.debug("Subscribed {}", someId);
                 redisq.push(new DummyObject(someId, 23, new HashMap<>()));
                 LOG.debug("Pushed {}", someId);

@@ -14,6 +14,8 @@ import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.rholder.retry.*;
+import com.google.common.collect.ImmutableSet;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -135,12 +137,13 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     @Override
-    public Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException {
+    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout,
+            TimeUnit unit) throws StateFutureInitializationException {
         return new StateFuture(state, id, jedisPool, timeout, unit);
     }
 
     @Override
-    public Future<Void> getFutureForDocumentStateWait(State state, String id, long timeout,
+    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout,
             TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException {
         return new StateFuture(state, id, pool, timeout, unit);
     }
@@ -282,7 +285,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         }
         LOG.debug("Shutting down thread {}", name);
         threadPool.shutdown();
-        threadPool.awaitTermination(10, TimeUnit.SECONDS);
+        threadPool.awaitTermination(1, TimeUnit.MINUTES);
         LOG.info("Closed {}", name);
     }
 
@@ -299,7 +302,7 @@ public class Redisq<T extends Document> implements Queue<T> {
     @Override
     public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit)
             throws WaitException {
-        Future<Void> f = getFutureForDocumentStateWait(DONE, dummyObject.getIdAsString(),
+        Future<Void> f = getFutureForDocumentStateWait(ImmutableSet.of(DONE, FAILED), dummyObject.getIdAsString(),
                 waitTimeout, waitTimeoutUnit);
         push(dummyObject);
         try {

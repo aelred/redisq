@@ -11,7 +11,7 @@ public class ExtendedStateInfo {
 
     public ExtendedStateInfo() {}
 
-    public ExtendedStateInfo(String id, StateInfo state) {
+    public ExtendedStateInfo(String id, StateInfo stateInfo) {
         this.id = id;
         this.stateInfo = stateInfo;
     }
