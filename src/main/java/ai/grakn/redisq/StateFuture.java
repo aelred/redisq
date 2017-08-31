@@ -3,6 +3,10 @@ package ai.grakn.redisq;
 import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.util.Names;
+import com.codahale.metrics.MetricRegistry;
+import static com.codahale.metrics.MetricRegistry.name;
+import com.codahale.metrics.Timer;
+import com.codahale.metrics.Timer.Context;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,37 +22,28 @@ public class StateFuture implements Future<Void> {
     private final JedisPubSub sub;
     private final CompletableFuture<Void> subscription;
     private final Names names;
+    private final Timer subscribeWait;
 
     private Set<State> targetState;
     private String id;
     private final Pool<Jedis> jedisPool;
+    private final MetricRegistry metricRegistry;
     private final CountDownLatch latch = new CountDownLatch(1);
 
 
-    public StateFuture(Set<State> targetState, String id, Pool<Jedis> jedisPool, long subscriptionWaitTimeout, TimeUnit subscriptionWaitUnit) throws StateFutureInitializationException {
+    StateFuture(Set<State> targetState, String id, Pool<Jedis> jedisPool,
+            long subscriptionWaitTimeout, TimeUnit subscriptionWaitUnit,
+            MetricRegistry metricRegistry) throws StateFutureInitializationException {
         this.targetState = targetState;
         this.id = id;
         this.jedisPool = jedisPool;
+        this.metricRegistry = metricRegistry;
         this.names = new Names();
         this.sub = new JedisPubSub() {
 
             @Override
             public void onSubscribe(String channel, int subscribedChannels) {
                 latch.countDown();
-//                String state;
-//                try (Jedis jedis = jedisPool.getResource()) {
-//                    state = jedis.get(names.stateKeyFromId(id));
-//                }
-//                if (state != null) {
-//                    try {
-//                        if (Redisq.stateMapper.deserialize(state).getState().equals(targetState)) {
-//                            unsubscribe();
-//                            LOG.debug("Unsubscribed because status was already as expected {}", id);
-//                        }
-//                    } catch (DeserializationException e) {
-//                        LOG.error("Could not deserialize state for {}", id, e);
-//                    }
-//                }
             }
 
             @Override
@@ -70,7 +65,10 @@ public class StateFuture implements Future<Void> {
                 }
             }
         };
-        try {
+        subscribeWait = metricRegistry.timer(name(StateFuture.class, "subscribe_wait"));
+        Timer initWaitTimer = metricRegistry.timer(name(StateFuture.class, "init_wait"));
+
+        try (Context ignored = initWaitTimer.time()) {
             this.subscription = subscribe(subscriptionWaitTimeout, subscriptionWaitUnit);
         } catch (InterruptedException e) {
             throw new StateFutureInitializationException("Could not initialise StateFuture for id " + id, e);
@@ -94,7 +92,9 @@ public class StateFuture implements Future<Void> {
                     }
                     String stateChannel = new Names().stateChannelKeyFromId(id);
                     LOG.debug("Waiting for changes to {}", stateChannel);
-                    jedis.subscribe(sub, stateChannel);
+                    try (Context ignored = subscribeWait.time()) {
+                        jedis.subscribe(sub, stateChannel);
+                    }
                 } finally{
                     latch.countDown();
                 }

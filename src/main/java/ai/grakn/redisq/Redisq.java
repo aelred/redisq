@@ -12,6 +12,7 @@ import ai.grakn.redisq.util.Names;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
+import com.codahale.metrics.Timer.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.rholder.retry.*;
 import com.google.common.collect.ImmutableSet;
@@ -36,9 +37,10 @@ import static com.codahale.metrics.MetricRegistry.name;
 
 public class Redisq<T extends Document> implements Queue<T> {
 
-    private static final Logger LOG = LoggerFactory.getLogger(Redisq.class);
     static final Mapper<StateInfo> stateMapper = new Mapper<>(StateInfo.class);
-    public static final Retryer<Integer> CLOSE_RETRIER = RetryerBuilder.<Integer>newBuilder()
+
+    private static final Logger LOG = LoggerFactory.getLogger(Redisq.class);
+    private static final Retryer<Integer> CLOSE_RETRIER = RetryerBuilder.<Integer>newBuilder()
             .retryIfResult(r -> !(r != null && r == 0))
             .withWaitStrategy(WaitStrategies.fixedWait(100, TimeUnit.MILLISECONDS))
             .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
@@ -57,11 +59,15 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final AtomicBoolean working = new AtomicBoolean(false);
     private final AtomicInteger runningThreads = new AtomicInteger(0);
     private Duration discardTime;
+    private final MetricRegistry metricRegistry;
     private QueueConsumer<T> subscription;
     private Future<?> mainLoop;
     private Future<?> inFlightLoop;
 
+    private final Timer restoreBlockedTimer;
+    private final Timer idleTimer;
     private final Timer pushTimer;
+    private final Timer executeWaitTimer;
     private final Meter serializationErrors;
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
@@ -73,6 +79,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         this.ttlStateInfo = (int) ttlStateInfo.getSeconds();
         this.lockTime = (int) lockTime.getSeconds();
         this.discardTime = discardTime;
+        this.metricRegistry = metricRegistry;
         this.subscription = new RedisqConsumer<>(consumer, jedisPool, this);
         this.names = new Names();
         this.queueName = names.queueNameFor(name);
@@ -83,6 +90,9 @@ public class Redisq<T extends Document> implements Queue<T> {
                 .constructParametricType(TimedWrap.class, klass));
 
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
+        this.idleTimer = metricRegistry.timer(name(this.getClass(), "idle"));
+        this.restoreBlockedTimer = metricRegistry.timer(name(this.getClass(), "restore_blocked"));
+        this.executeWaitTimer = metricRegistry.timer(name(this.getClass(), "execute_wait"));
         this.serializationErrors = metricRegistry
                 .meter(name(this.getClass(), "serialization_errors"));
     }
@@ -139,13 +149,13 @@ public class Redisq<T extends Document> implements Queue<T> {
     @Override
     public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout,
             TimeUnit unit) throws StateFutureInitializationException {
-        return new StateFuture(state, id, jedisPool, timeout, unit);
+        return new StateFuture(state, id, jedisPool, timeout, unit, metricRegistry);
     }
 
     @Override
     public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout,
             TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException {
-        return new StateFuture(state, id, pool, timeout, unit);
+        return new StateFuture(state, id, pool, timeout, unit, metricRegistry);
     }
 
     private void inflightIteration() {
@@ -162,11 +172,13 @@ public class Redisq<T extends Document> implements Queue<T> {
                         if (ttl == 0  /* TODO check this || ttl == -2 */) {
                             LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id,
                                     lockId, ttl);
-                            // Restore it in the main queue
-                            Transaction multi = jedis.multi();
-                            multi.lrem(inFlightQueueName, 1, id);
-                            multi.lpush(queueName, id);
-                            multi.exec();
+                            try (Context ignored = restoreBlockedTimer.time()) {
+                                // Restore it in the main queue
+                                Transaction multi = jedis.multi();
+                                multi.lrem(inFlightQueueName, 1, id);
+                                multi.lpush(queueName, id);
+                                multi.exec();
+                            }
                         }
                     }
                 });
@@ -177,18 +189,14 @@ public class Redisq<T extends Document> implements Queue<T> {
         String value;
         String key;
         try (Jedis jedis = jedisPool.getResource()) {
-            String id = jedis.brpoplpush(queueName, inFlightQueueName, (int) timeout.getSeconds());
+            String id;
+            try(Context ignored = idleTimer.time()) {
+                id = jedis.brpoplpush(queueName, inFlightQueueName, (int) timeout.getSeconds());
+            }
             // If something goes wrong after this, the job will be stuck in inflightIteration
             if (id != null) {
-                LOG.debug("Found id {}", id);
-                jedis.setex(names.lockKeyFromId(id), lockTime, "locked");
-                Optional<StateInfo> state = getState(id);
-                if (state.isPresent() && !state.get().getState().equals(NEW)) {
-                    LOG.warn("State already present for {}: {}", id, state.get().getState());
-                }
-                setState(jedis, timestampMs, id, PROCESSING, "");
                 key = names.contentKeyFromId(id);
-                value = jedis.get(key);
+                value = lockAndGetDocument(timestampMs, key, jedis, id);
             } else {
                 LOG.debug("Empty queue");
                 return;
@@ -205,25 +213,49 @@ public class Redisq<T extends Document> implements Queue<T> {
             try {
                 if (Duration.ofMillis(timestampMs - element.getTimestampMs())
                         .compareTo(discardTime) < 0) {
-                    threadPool.execute(() -> {
-                        runningThreads.incrementAndGet();
-                        try {
-                            subscription.process(element.getElement());
-                        } finally {
-                            runningThreads.decrementAndGet();
-                        }
-                    });
+                    try (Context ignored = executeWaitTimer.time()) {
+                        execute(element);
+                    }
                 }
             } catch (RejectedExecutionException e) {
-                try (Jedis jedis = jedisPool.getResource()) {
-                    jedis.lpush(key, value);
-                    LOG.error("Rejected execution, re-enqueued {}",
-                            element.getElement().getIdAsString(), e);
-                } catch (Exception pushE) {
-                    LOG.error("Could not re-enqueue {}", element.getElement().getIdAsString(), e);
-                }
+                processRejected(value, key, element, e);
             }
         }
+    }
+
+    private String lockAndGetDocument(long timestampMs, String key, Jedis jedis, String id) {
+        String value;
+        LOG.debug("Found id {}", id);
+        jedis.setex(names.lockKeyFromId(id), lockTime, "locked");
+        Optional<StateInfo> state = getState(id);
+        if (state.isPresent() && !state.get().getState().equals(NEW)) {
+            LOG.warn("State already present for {}: {}", id, state.get().getState());
+        }
+        setState(jedis, timestampMs, id, PROCESSING, "");
+        value = jedis.get(key);
+        return value;
+    }
+
+    private void processRejected(String value, String key, TimedWrap<T> element,
+            RejectedExecutionException e) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.lpush(key, value);
+            LOG.error("Rejected execution, re-enqueued {}",
+                    element.getElement().getIdAsString(), e);
+        } catch (Exception pushE) {
+            LOG.error("Could not re-enqueue {}", element.getElement().getIdAsString(), e);
+        }
+    }
+
+    private void execute(TimedWrap<T> element) {
+        threadPool.execute(() -> {
+            runningThreads.incrementAndGet();
+            try {
+                subscription.process(element.getElement());
+            } finally {
+                runningThreads.decrementAndGet();
+            }
+        });
     }
 
     @Override
