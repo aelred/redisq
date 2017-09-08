@@ -25,8 +25,8 @@ Add it as a dependency in Maven as:
 
 <repositories>
     <repository>
-        <id>development-snapshots</id>
-        <url>https://maven.grakn.ai/content/repositories/snapshots/</url>
+        <id>releases</id>
+        <url>https://maven.grakn.ai/content/repositories/releases/</url>
     </repository>
 </repositories>
 ```

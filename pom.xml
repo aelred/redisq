@@ -41,13 +41,6 @@
             <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
         </repository>
     </distributionManagement>
-    <repositories>
-        <!--Snapshot repository for 3rd party libraries -->
-        <repository>
-            <id>development-snapshots</id>
-            <url>https://maven.grakn.ai/content/repositories/snapshots/</url>
-        </repository>
-    </repositories>
     <developers>
         <developer>
             <id>pluraliseseverythings</id>
