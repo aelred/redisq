@@ -137,6 +137,10 @@ public class RedisqTest {
                         .createRedisq();
                 // Don't start consumer
                 List<Future<Void>> subscriptions = new ArrayList<>();
+                // We make another JedisPool to hold the subscription connections
+                GenericObjectPoolConfig genericObjectPoolConfig = new GenericObjectPoolConfig();
+                genericObjectPoolConfig.setMaxTotal(DOCUMENTS);
+                jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
                 for(int j = 0; j < DOCUMENTS; j++) {
                     // Note how we are making the subbscriptions before the push.
                     // Otherwise we might lose the state change

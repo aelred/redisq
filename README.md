@@ -1,6 +1,6 @@
 ---
-[![GitHub release](https://img.shields.io/github/release/graknlabs/grakn.svg)](https://github.com/graknlabs/redisq/releases/latest)
-[![Build Status](https://travis-ci.org/graknlabs/grakn.svg?branch=internal)](https://travis-ci.org/graknlabs/redisq)
+[![GitHub release](https://img.shields.io/github/release/graknlabs/redisq.svg)](https://github.com/graknlabs/redisq/releases/latest)
+[![Build Status](https://travis-ci.org/graknlabs/redisq.svg?branch=internal)](https://travis-ci.org/graknlabs/redisq)
 [![Slack Status](http://grakn-slackin.herokuapp.com/badge.svg)](https://grakn.ai/slack)
 
 # Redisq
@@ -24,7 +24,7 @@ Add it as a dependency in Maven as:
     <dependency>
         <groupId>ai.grakn</groupId>
         <artifactId>redisq</artifactId>
-        <version>0.0.3</version>
+        <version>0.0.4</version>
     </dependency> 
 </dependencies>
 

@@ -362,17 +362,18 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     private Optional<StateInfo> getStateInfoFromRedisKey(String key) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            try {
-                String element = jedis.get(key);
-                if (element == null) {
-                    return Optional.empty();
-                } else {
-                    return Optional.of(stateMapper.deserialize(element));
-                }
-            } catch (DeserializationException e) {
-                throw new RuntimeException("Could not deserialize state info for " + key, e);
+        try {
+            String element;
+            try(Jedis jedis = jedisPool.getResource()) {
+                element = jedis.get(key);
             }
-        }
+            if (element == null) {
+                return Optional.empty();
+            } else {
+                return Optional.of(stateMapper.deserialize(element));
+            }
+        } catch (DeserializationException e) {
+        throw new RuntimeException("Could not deserialize state info for " + key, e);
+    }
     }
 }
