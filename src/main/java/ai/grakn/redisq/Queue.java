@@ -32,7 +32,7 @@ public interface Queue<T> {
 
 
     /**
-     * It returns a future that waits for a document to reac a certain state
+     * It returns a future that waits for a document to reach a certain state
      * Note that this works for DONE and FAILED since they are terminal states.
      * @param state     Desired state
      * @param id        Id of the document we are watching

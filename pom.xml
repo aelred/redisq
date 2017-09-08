@@ -8,7 +8,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>ai.grakn</groupId>
     <artifactId>redisq</artifactId>
-    <version>0.0.3-SNAPSHOT</version>
+    <version>0.0.3</version>
     <packaging>jar</packaging>
     <name>Redisq</name>
     <description>Queue in Redis</description>

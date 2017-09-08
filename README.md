@@ -19,7 +19,7 @@ Add it as a dependency in Maven as:
     <dependency>
         <groupId>ai.grakn</groupId>
         <artifactId>redisq</artifactId>
-        <version>0.0.1</version>
+        <version>0.0.3</version>
     </dependency> 
 </dependencies>
 
@@ -74,7 +74,7 @@ We can implement a producer that pushes just one document and waits for 1 second
 processed as follows.
 
 ```java
-redisq.push(new DummyObject("documentid", 1, TimeUnit.Seconds));
+redisq.push(new DummyObject("documentid"));
 ```
 
 Remember to close the queue:

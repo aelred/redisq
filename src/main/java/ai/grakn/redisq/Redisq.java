@@ -9,8 +9,11 @@ import ai.grakn.redisq.consumer.Mapper;
 import ai.grakn.redisq.consumer.RedisqConsumer;
 import ai.grakn.redisq.consumer.TimedWrap;
 import ai.grakn.redisq.util.Names;
+import com.codahale.metrics.CachedGauge;
+import com.codahale.metrics.Gauge;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.MetricRegistry.MetricSupplier;
 import com.codahale.metrics.Timer;
 import com.codahale.metrics.Timer.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -91,6 +94,15 @@ public class Redisq<T extends Document> implements Queue<T> {
 
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
         this.idleTimer = metricRegistry.timer(name(this.getClass(), "idle"));
+            metricRegistry.register(name(this.getClass(), "queue", "size"),
+                new CachedGauge<Long>(15, TimeUnit.SECONDS) {
+                    @Override
+                    protected Long loadValue() {
+                        try (Jedis jedis = jedisPool.getResource()) {
+                            return jedis.llen(queueName);
+                        }
+                    }
+                });
         this.restoreBlockedTimer = metricRegistry.timer(name(this.getClass(), "restore_blocked"));
         this.executeWaitTimer = metricRegistry.timer(name(this.getClass(), "execute_wait"));
         this.serializationErrors = metricRegistry
