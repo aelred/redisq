@@ -100,7 +100,7 @@ public class RedisqTest {
         redisq.startConsumer();
         String someId = "some id";
         redisq.push(new DummyObject(someId, 23, new HashMap<>()));
-        redisq.getFutureForDocumentStateWait(ImmutableSet.of(FAILED), someId, 1, SECONDS).get(3, SECONDS);
+        redisq.getFutureForDocumentStateWait(ImmutableSet.of(FAILED), someId, 1, SECONDS).get();
         assertThat(redisq.getState(someId).get().getState(), equalTo(FAILED));
         assertThat(redisq.getState(someId).get().getInfo(), equalTo(message));
         redisq.close();
@@ -358,7 +358,6 @@ public class RedisqTest {
 
     @AfterClass
     public static void afterClass() {
-        jedisPool.close();
         server.stop();
         server = null;
     }

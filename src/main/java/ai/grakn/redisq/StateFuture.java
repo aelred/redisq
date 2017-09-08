@@ -2,6 +2,7 @@ package ai.grakn.redisq;
 
 import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
+import ai.grakn.redisq.exceptions.SubscriptionInterruptedException;
 import ai.grakn.redisq.util.Names;
 import com.codahale.metrics.MetricRegistry;
 import static com.codahale.metrics.MetricRegistry.name;
@@ -27,7 +28,6 @@ public class StateFuture implements Future<Void> {
     private Set<State> targetState;
     private String id;
     private final Pool<Jedis> jedisPool;
-    private final MetricRegistry metricRegistry;
     private final CountDownLatch latch = new CountDownLatch(1);
 
 
@@ -37,7 +37,6 @@ public class StateFuture implements Future<Void> {
         this.targetState = targetState;
         this.id = id;
         this.jedisPool = jedisPool;
-        this.metricRegistry = metricRegistry;
         this.names = new Names();
         this.sub = new JedisPubSub() {
 
@@ -99,8 +98,12 @@ public class StateFuture implements Future<Void> {
                     latch.countDown();
                 }
             } catch (JedisConnectionException e) {
-                LOG.error("Could not connect to Redis while subscribing to {}. Jedis idle {}, active {}", id, jedisPool.getNumIdle(), jedisPool.getNumActive(), e);
-                throw e;
+                if (jedisPool.isClosed()) {
+                    throw new SubscriptionInterruptedException("Subscription interrupted because the Jedis connection was closed for id " + id, e);
+                } else {
+                    LOG.error("Could not connect to Redis while subscribing to {}", id, e);
+                    throw e;
+                }
             }
         });
         if (!f.isCompletedExceptionally() && !f.isCancelled()) {
@@ -129,6 +132,7 @@ public class StateFuture implements Future<Void> {
 
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
+        sub.unsubscribe();
         return subscription.cancel(mayInterruptIfRunning);
     }
 

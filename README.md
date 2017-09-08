@@ -1,3 +1,8 @@
+---
+[![GitHub release](https://img.shields.io/github/release/graknlabs/grakn.svg)](https://github.com/graknlabs/redisq/releases/latest)
+[![Build Status](https://travis-ci.org/graknlabs/grakn.svg?branch=internal)](https://travis-ci.org/graknlabs/redisq)
+[![Slack Status](http://grakn-slackin.herokuapp.com/badge.svg)](https://grakn.ai/slack)
+
 # Redisq
 
 Redisq is a lightweight library that implements a simple publish/subscriber interface for reliable queues on Redis.
