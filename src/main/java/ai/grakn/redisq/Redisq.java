@@ -49,7 +49,7 @@ public class Redisq<T extends Document> implements Queue<T> {
             .withWaitStrategy(WaitStrategies.fixedWait(100, TimeUnit.MILLISECONDS))
             .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
             .build();
-    public static final int DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS = 5;
+    private static final int DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS = 30;
 
     private final String queueName;
     private final String inFlightQueueName;
