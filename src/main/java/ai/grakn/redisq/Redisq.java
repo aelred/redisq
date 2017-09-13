@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Transaction;
+import redis.clients.jedis.exceptions.JedisConnectionException;
 import redis.clients.util.Pool;
 
 import java.time.Duration;
@@ -143,19 +144,30 @@ public class Redisq<T extends Document> implements Queue<T> {
         mainLoop = Executors.newSingleThreadExecutor().submit(() -> {
             // We keep one resource for the iteration
             while (working.get()) {
-                iteration();
+                try {
+                    iteration();
+                } catch(JedisConnectionException exception) {
+                    reportBadConnectionAndStop(exception);
+                }
             }
         });
         inFlightLoop = Executors.newSingleThreadExecutor().submit(() -> {
             while (working.get()) {
-                inflightIteration();
                 try {
+                    inflightIteration();
                     TimeUnit.MILLISECONDS.sleep(500);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
+                } catch(JedisConnectionException exception) {
+                    reportBadConnectionAndStop(exception);
                 }
             }
         });
+    }
+
+    private void reportBadConnectionAndStop(JedisConnectionException exception) {
+        LOG.error("Could not connect to Redis. Jedis closed: {}", jedisPool.isClosed(), exception);
+        working.set(false);
     }
 
     @Override
