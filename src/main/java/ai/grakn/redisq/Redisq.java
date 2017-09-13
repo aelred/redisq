@@ -49,6 +49,7 @@ public class Redisq<T extends Document> implements Queue<T> {
             .withWaitStrategy(WaitStrategies.fixedWait(100, TimeUnit.MILLISECONDS))
             .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
             .build();
+    public static final int DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS = 5;
 
     private final String queueName;
     private final String inFlightQueueName;
@@ -171,9 +172,8 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     @Override
-    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout,
-            TimeUnit unit) throws StateFutureInitializationException {
-        return new StateFuture(state, id, jedisPool, timeout, unit, metricRegistry);
+    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id) throws StateFutureInitializationException {
+        return new StateFuture(state, id, jedisPool, DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS, metricRegistry);
     }
 
     @Override
@@ -358,8 +358,7 @@ public class Redisq<T extends Document> implements Queue<T> {
     @Override
     public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit)
             throws WaitException {
-        Future<Void> f = getFutureForDocumentStateWait(ImmutableSet.of(DONE, FAILED), dummyObject.getIdAsString(),
-                waitTimeout, waitTimeoutUnit);
+        Future<Void> f = getFutureForDocumentStateWait(ImmutableSet.of(DONE, FAILED), dummyObject.getIdAsString());
         push(dummyObject);
         try {
             f.get(waitTimeout, waitTimeoutUnit);

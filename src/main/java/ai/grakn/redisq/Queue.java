@@ -36,17 +36,17 @@ public interface Queue<T> {
      * Note that this works for DONE and FAILED since they are terminal states.
      * @param state     Desired state
      * @param id        Id of the document we are watching
-     * @param timeout   How long to wait until failing
-     * @param unit      Unit of the timeout
      * @return          A future that blocks on the state being equal to the given state
      * @throws StateFutureInitializationException   Thrown if it fails to subscribe to the state
      */
-    Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout, TimeUnit unit) throws StateFutureInitializationException;
+    Future<Void> getFutureForDocumentStateWait(Set<State> state, String id) throws StateFutureInitializationException;
 
 
     /**
-     * @see ai.grakn.redisq.Queue#getFutureForDocumentStateWait(Set, String, long, TimeUnit)
+     * @see ai.grakn.redisq.Queue#getFutureForDocumentStateWait(Set, String)
      * Also takes a jedis pool
+     * @param timeout   How long to wait until failing the subscription
+     * @param unit      Unit of the timeout
      */
     Future<Void> getFutureForDocumentStateWait(Set<State> state, String id, long timeout, TimeUnit unit, Pool<Jedis> pool) throws StateFutureInitializationException;
 
