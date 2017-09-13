@@ -145,29 +145,19 @@ public class Redisq<T extends Document> implements Queue<T> {
         mainLoop = Executors.newSingleThreadExecutor().submit(() -> {
             // We keep one resource for the iteration
             while (working.get()) {
-                try {
-                    iteration();
-                } catch(JedisConnectionException exception) {
-                    reportBadConnection(exception);
-                }
+                iteration();
             }
         });
         inFlightLoop = Executors.newSingleThreadExecutor().submit(() -> {
             while (working.get()) {
+                inflightIteration();
                 try {
-                    inflightIteration();
                     TimeUnit.MILLISECONDS.sleep(500);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
-                } catch(JedisConnectionException exception) {
-                    reportBadConnection(exception);
                 }
             }
         });
-    }
-
-    private void reportBadConnection(JedisConnectionException exception) {
-        LOG.error("Could not connect to Redis. Jedis closed: {}", jedisPool.isClosed(), exception);
     }
 
     @Override
