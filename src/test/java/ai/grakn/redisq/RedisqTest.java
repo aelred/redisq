@@ -153,6 +153,7 @@ public class RedisqTest {
                 for(int j = 0; j < DOCUMENTS; j++) {
                     String pidid = makePid(pid, j);
                     try {
+                        LOG.debug("Waiting for {}", pidid);
                         subscriptions.get(j).get();
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
