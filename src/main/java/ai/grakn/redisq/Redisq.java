@@ -148,7 +148,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 try {
                     iteration();
                 } catch(JedisConnectionException exception) {
-                    reportBadConnectionAndStop(exception);
+                    reportBadConnection(exception);
                 }
             }
         });
@@ -160,15 +160,14 @@ public class Redisq<T extends Document> implements Queue<T> {
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 } catch(JedisConnectionException exception) {
-                    reportBadConnectionAndStop(exception);
+                    reportBadConnection(exception);
                 }
             }
         });
     }
 
-    private void reportBadConnectionAndStop(JedisConnectionException exception) {
+    private void reportBadConnection(JedisConnectionException exception) {
         LOG.error("Could not connect to Redis. Jedis closed: {}", jedisPool.isClosed(), exception);
-        working.set(false);
     }
 
     @Override
@@ -339,7 +338,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 }
             }
         }
-        LOG.debug("Shutting down thread {}", name);
+        LOG.debug("Shutting down queue {}", name);
         threadPool.shutdown();
         threadPool.awaitTermination(1, TimeUnit.MINUTES);
         LOG.info("Closed {}", name);
