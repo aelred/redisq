@@ -1,7 +1,6 @@
 package ai.grakn.redisq;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import static java.awt.SystemColor.info;
 
 public class ExtendedStateInfo {
     @JsonProperty
@@ -9,6 +8,7 @@ public class ExtendedStateInfo {
     @JsonProperty
     private StateInfo stateInfo;
 
+    // Required by Jackson
     public ExtendedStateInfo() {}
 
     public ExtendedStateInfo(String id, StateInfo stateInfo) {

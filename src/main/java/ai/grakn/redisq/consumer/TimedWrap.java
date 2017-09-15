@@ -8,6 +8,7 @@ public class TimedWrap<T>  {
     @JsonProperty
     private long timestampMs;
 
+    // Required by Jackson
     public TimedWrap() {}
 
     public TimedWrap(T element, long timestampMs) {

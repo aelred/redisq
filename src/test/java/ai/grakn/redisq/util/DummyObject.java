@@ -15,8 +15,8 @@ public class DummyObject implements Document {
     @JsonProperty
     private Map<String, Integer> aMap;
 
-    public DummyObject() {
-    }
+    // Required by Jackson
+    public DummyObject() {}
 
     public DummyObject(String id) {
         this(id, -1, new HashMap<>());

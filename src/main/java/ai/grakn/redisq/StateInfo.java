@@ -10,8 +10,8 @@ public class StateInfo {
     @JsonProperty
     private String info = null;
 
-    public StateInfo() {
-    }
+    // Required by Jackson
+    public StateInfo() {}
 
     public StateInfo(State state, long lastProcessed, String info) {
         this.state = state;

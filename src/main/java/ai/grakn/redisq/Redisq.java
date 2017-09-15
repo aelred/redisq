@@ -1,42 +1,52 @@
 package ai.grakn.redisq;
 
+import static ai.grakn.redisq.State.DONE;
+import static ai.grakn.redisq.State.FAILED;
+import static ai.grakn.redisq.State.NEW;
+import static ai.grakn.redisq.State.PROCESSING;
+import ai.grakn.redisq.consumer.Mapper;
 import ai.grakn.redisq.consumer.QueueConsumer;
+import ai.grakn.redisq.consumer.RedisqConsumer;
+import ai.grakn.redisq.consumer.TimedWrap;
 import ai.grakn.redisq.exceptions.DeserializationException;
+import ai.grakn.redisq.exceptions.RedisqException;
 import ai.grakn.redisq.exceptions.SerializationException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.WaitException;
-import ai.grakn.redisq.consumer.Mapper;
-import ai.grakn.redisq.consumer.RedisqConsumer;
-import ai.grakn.redisq.consumer.TimedWrap;
 import ai.grakn.redisq.util.Names;
 import com.codahale.metrics.CachedGauge;
-import com.codahale.metrics.Gauge;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
-import com.codahale.metrics.MetricRegistry.MetricSupplier;
+import static com.codahale.metrics.MetricRegistry.name;
 import com.codahale.metrics.Timer;
 import com.codahale.metrics.Timer.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.rholder.retry.*;
+import com.github.rholder.retry.RetryException;
+import com.github.rholder.retry.Retryer;
+import com.github.rholder.retry.RetryerBuilder;
+import com.github.rholder.retry.StopStrategies;
+import com.github.rholder.retry.WaitStrategies;
 import com.google.common.collect.ImmutableSet;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Transaction;
 import redis.clients.util.Pool;
-
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
-
-import static ai.grakn.redisq.State.*;
-import static com.codahale.metrics.MetricRegistry.name;
 
 public class Redisq<T extends Document> implements Queue<T> {
 
@@ -120,8 +130,7 @@ public class Redisq<T extends Document> implements Queue<T> {
             stateSerialized = stateMapper.serialize(new StateInfo(NEW, timestampMs, ""));
         } catch (SerializationException e) {
             serializationErrors.mark();
-            throw new RuntimeException("Could not serialize element " + document.getIdAsString(),
-                    e);
+            throw new RedisqException("Could not serialize element " + document.getIdAsString(), e);
         }
         LOG.debug("Jedis active: {}, idle: {}", jedisPool.getNumActive(), jedisPool.getNumIdle());
         try (Jedis jedis = jedisPool.getResource(); Timer.Context ignored = pushTimer.time();) {
@@ -140,6 +149,7 @@ public class Redisq<T extends Document> implements Queue<T> {
 
     @Override
     public void startConsumer() {
+        LOG.debug("Starting consumer {}", name);
         working.set(true);
         mainLoop = Executors.newSingleThreadExecutor().submit(() -> {
             // We keep one resource for the iteration
@@ -153,7 +163,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 try {
                     TimeUnit.MILLISECONDS.sleep(500);
                 } catch (InterruptedException e) {
-                    e.printStackTrace();
+                    LOG.warn("Inflight sleep interrupted", e);
                 }
             }
         });
@@ -284,7 +294,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         try {
             stateSerialized = stateMapper.serialize(stateInfo);
         } catch (SerializationException e) {
-            throw new RuntimeException("Could not serialize state " + stateInfo);
+            throw new RedisqException("Could not serialize state " + stateInfo);
         }
         jedis.setex(names.stateKeyFromId(id), ttlStateInfo, stateSerialized);
         jedis.publish(names.stateChannelKeyFromId(id), stateSerialized);
@@ -372,7 +382,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 return Optional.of(stateMapper.deserialize(element));
             }
         } catch (DeserializationException e) {
-        throw new RuntimeException("Could not deserialize state info for " + key, e);
+        throw new RedisqException("Could not deserialize state info for " + key, e);
     }
     }
 }
