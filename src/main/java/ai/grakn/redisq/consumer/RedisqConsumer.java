@@ -55,10 +55,13 @@ public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
             String id = element.getIdAsString();
             tRedisq.setState(jedis, System.currentTimeMillis(), id, state, info);
             jedis.del(tRedisq.getNames().lockKeyFromId(id));
-        } catch (JedisConnectionException e) {
+        } catch (JedisConnectionException jedisException) {
             LOG.error("Pool is full  or terminated. Active: {}, idle: {}", jedisPool.getNumActive(), jedisPool.getNumIdle());
-            throw e;
-        }
+            throw jedisException;
+        } catch (Exception e) {
+             LOG.error("Unexpected exception while updating state for {}", element, e);
+             throw e;
+         }
         LOG.debug("Status {} set as {}", element.getIdAsString(), state);
     }
 
