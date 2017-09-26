@@ -162,7 +162,16 @@ public class RedisqTest {
                     String pidid = makePid(pid, j);
                     try {
                         LOG.debug("Waiting for {}", pidid);
-                        subscriptions.get(j).get();
+                        boolean found = false;
+                        // TODO Remove this primitive retrying once it's clear what's happening
+                        while(!found) {
+                            try {
+                                subscriptions.get(j).get(3, SECONDS);
+                                found = true;
+                            } catch (Exception e) {
+                                LOG.error("Failed to get {} in time", pidid, e);
+                            }
+                        }
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
