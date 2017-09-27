@@ -165,7 +165,7 @@ public class RedisqTest {
                         LOG.debug("Waiting for {}", pidid);
                         subscriptions.get(j).get(10, SECONDS);
                         LOG.debug("Wait for {} succeeded", pidid);
-                    } catch (Exception e) {
+                    } catch (Throwable e) {
                         LOG.error("Wait for {} failed", pidid, e);
                         try(Jedis resource = jedisPool.getResource()) {
                             String lockId = names.lockKeyFromId(pidid);
@@ -176,10 +176,11 @@ public class RedisqTest {
                             Boolean channelExists = resource
                                     .exists(names.stateChannelKeyFromId(pidid));
                             LOG.error("Diagnostic info. \nLock: {}\nQueue: {}\nContent: {}\nState: {}\nChannel Exists:{}", lock, queue, content, state, channelExists);
-                        } catch (Exception eDiag) {
+                        } catch (Throwable eDiag) {
                             LOG.error("Failed get diagnostics", eDiag);
+                        } finally {
+                            assertThat("Errors while waiting for state", false,  is(true));
                         }
-                        assertThat("Errors while waiting for state", false);
                     }
                 }
                 redisq.close();
