@@ -135,6 +135,7 @@ public class RedisqTest {
         ExecutorService consumersThreadPool = Executors.newFixedThreadPool(CONSUMERS);
         String sharedQueueName = "prod_con_example_queue";
         Set<Future> producers = new HashSet<>();
+        Names names = new Names();
         for(int i = 0; i < PRODUCERS; i++) {
             final int pid = i;
             Future<Void> future = producersThreadPool.submit(() -> {
@@ -162,19 +163,21 @@ public class RedisqTest {
                     String pidid = makePid(pid, j);
                     try {
                         LOG.debug("Waiting for {}", pidid);
-                        boolean found = false;
-                        // TODO Remove this primitive retrying once it's clear what's happening
-                        while(!found) {
-                            try {
-                                subscriptions.get(j).get(3, SECONDS);
-                                found = true;
-                            } catch (Exception e) {
-                                LOG.error("Failed to get {} in time", pidid, e);
-                            }
-                        }
+                        subscriptions.get(j).get(10, SECONDS);
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
+                        LOG.error("Failed to get {} in time", pidid, e);
+                        try(Jedis resource = jedisPool.getResource()) {
+                            String lockId = names.lockKeyFromId(pidid);
+                            String lock = resource.get(lockId);
+                            List<String> queue = resource.lrange(sharedQueueName, 0, -1);
+                            String content = resource.get(names.contentKeyFromId(pidid));
+                            String state = resource.get(names.stateKeyFromId(pidid));
+                            Boolean channelExists = resource
+                                    .exists(names.stateChannelKeyFromId(pidid));
+                            LOG.error("Diagnostic info. \nLock: {}\nQueue: {}\nContent: {}\nState: {}\nChannel Exists:{}", lock, queue, content, state, channelExists);
+                        }
                         assertThat("Errors while waiting for state", false);
                     }
                 }
