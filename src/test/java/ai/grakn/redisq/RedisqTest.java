@@ -167,7 +167,6 @@ public class RedisqTest {
                         LOG.debug("Wait for {} succeeded", pidid);
                     } catch (Exception e) {
                         LOG.error("Wait for {} failed", pidid, e);
-                        LOG.error("Failed to get {} in time", pidid, e);
                         try(Jedis resource = jedisPool.getResource()) {
                             String lockId = names.lockKeyFromId(pidid);
                             String lock = resource.get(lockId);
@@ -177,6 +176,8 @@ public class RedisqTest {
                             Boolean channelExists = resource
                                     .exists(names.stateChannelKeyFromId(pidid));
                             LOG.error("Diagnostic info. \nLock: {}\nQueue: {}\nContent: {}\nState: {}\nChannel Exists:{}", lock, queue, content, state, channelExists);
+                        } catch (Exception eDiag) {
+                            LOG.error("Failed get diagnostics", eDiag);
                         }
                         assertThat("Errors while waiting for state", false);
                     }
