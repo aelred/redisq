@@ -202,6 +202,9 @@ public class Redisq<T extends Document> implements Queue<T> {
                                 multi.exec();
                             }
                         }
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        LOG.info("Interrupted while sleeping");
                     }
                 });
     }
