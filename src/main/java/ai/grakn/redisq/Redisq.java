@@ -185,14 +185,16 @@ public class Redisq<T extends Document> implements Queue<T> {
         try (Jedis jedis = jedisPool.getResource()) {
             processingElements = jedis.lrange(inFlightQueueName, 0, -1);
         }
+        LOG.debug("Found {} documents in flight", processingElements.size());
         processingElements
                 .forEach(id -> {
                     try (Jedis jedis = jedisPool.getResource()) {
                         String lockId = names.lockKeyFromId(id);
                         // TODO We might get more than one consumer doing this
                         Long ttl = jedis.ttl(lockId);
-                        if (ttl == 0  /* TODO check this || ttl == -2 */) {
-                            LOG.debug("Found unlocked element {}, lockId({}), ttl={}", id,
+                        LOG.debug("Id {} has {} ttl", id, ttl);
+                        if (ttl == 0 || ttl == -2) {
+                            LOG.trace("Found unlocked element {}, lockId({}), ttl={}", id,
                                     lockId, ttl);
                             try (Context ignored = restoreBlockedTimer.time()) {
                                 // Restore it in the main queue
@@ -202,7 +204,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                                 multi.exec();
                             }
                         }
-                        Thread.sleep(500);
+                        Thread.sleep(1000);
                     } catch (InterruptedException e) {
                         LOG.info("Interrupted while sleeping");
                     }
