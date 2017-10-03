@@ -50,8 +50,8 @@ public class RedisqTest {
     private static final long TIMEOUT = 30;
     private static final TimeUnit UNIT = SECONDS;
     private static final int PORT = 6382;
-    private static final int QUEUES = 1;
-    private static final int DOCUMENTS = 3;
+    private static final int QUEUES = 3;
+    private static final int DOCUMENTS = 10;
     private static final String LOCALHOST = "localhost";
     private static final int PRODUCERS = 10;
     private static final int CONSUMERS = 3;
