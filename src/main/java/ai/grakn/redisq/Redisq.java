@@ -26,6 +26,7 @@ import com.github.rholder.retry.Retryer;
 import com.github.rholder.retry.RetryerBuilder;
 import com.github.rholder.retry.StopStrategies;
 import com.github.rholder.retry.WaitStrategies;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import java.time.Duration;
 import java.util.List;
@@ -59,6 +60,7 @@ public class Redisq<T extends Document> implements Queue<T> {
             .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
             .build();
     private static final int DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS = 30;
+    private static final int MARGIN_MS = 60_000;
 
     private final String queueName;
     private final String inFlightQueueName;
@@ -85,9 +87,11 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Meter serializationErrors;
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
-            Duration discardTime,
-            Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
+            Duration discardTime, Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
             MetricRegistry metricRegistry) {
+        Preconditions.checkState(ttlStateInfo.minus(lockTime).toMillis() > MARGIN_MS,
+                "The ttl for a state has to be higher than the time a document is locked for by "
+                        + MARGIN_MS + "ms");
         this.name = name;
         this.timeout = timeout;
         this.ttlStateInfo = (int) ttlStateInfo.getSeconds();
@@ -105,7 +109,7 @@ public class Redisq<T extends Document> implements Queue<T> {
 
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
         this.idleTimer = metricRegistry.timer(name(this.getClass(), "idle"));
-            metricRegistry.register(name(this.getClass(), "queue", "size"),
+        metricRegistry.register(name(this.getClass(), "queue", "size"),
                 new CachedGauge<Long>(15, TimeUnit.SECONDS) {
                     @Override
                     protected Long loadValue() {
@@ -161,7 +165,7 @@ public class Redisq<T extends Document> implements Queue<T> {
             while (working.get()) {
                 inflightIteration();
                 try {
-                    TimeUnit.MILLISECONDS.sleep(500);
+                    TimeUnit.MILLISECONDS.sleep(5000);
                 } catch (InterruptedException e) {
                     LOG.warn("Inflight sleep interrupted", e);
                 }
@@ -170,8 +174,10 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     @Override
-    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id) throws StateFutureInitializationException {
-        return new StateFuture(state, id, jedisPool, DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS, metricRegistry);
+    public Future<Void> getFutureForDocumentStateWait(Set<State> state, String id)
+            throws StateFutureInitializationException {
+        return new StateFuture(state, id, jedisPool, DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS, metricRegistry);
     }
 
     @Override
@@ -194,19 +200,25 @@ public class Redisq<T extends Document> implements Queue<T> {
                         Long ttl = jedis.ttl(lockId);
                         LOG.debug("Id {} has {} ttl", id, ttl);
                         if (ttl == 0 || ttl == -2) {
-                            LOG.trace("Found unlocked element {}, lockId({}), ttl={}", id,
-                                    lockId, ttl);
-                            try (Context ignored = restoreBlockedTimer.time()) {
-                                // Restore it in the main queue
-                                Transaction multi = jedis.multi();
-                                multi.lrem(inFlightQueueName, 1, id);
-                                multi.lpush(queueName, id);
-                                multi.exec();
+                            Optional<StateInfo> state = getState(id);
+                            if (state.isPresent()) {
+                                if (state.get().getState().equals(PROCESSING)) {
+                                    LOG.trace("Found unlocked element {}, lockId({}), ttl={}", id,
+                                            lockId, ttl);
+                                    try (Context ignored = restoreBlockedTimer.time()) {
+                                        // Restore it in the main queue
+                                        Transaction multi = jedis.multi();
+                                        multi.lrem(inFlightQueueName, 1, id);
+                                        multi.lpush(queueName, id);
+                                        multi.exec();
+                                    }
+                                } else {
+                                    jedis.lrem(inFlightQueueName, 1, id);
+                                }
+                            } else {
+                                LOG.warn("Found expired document in inflight but no state info found for {}", id);
                             }
                         }
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        LOG.info("Interrupted while sleeping");
                     }
                 });
     }
@@ -217,7 +229,7 @@ public class Redisq<T extends Document> implements Queue<T> {
         String key;
         try (Jedis jedis = jedisPool.getResource()) {
             String id;
-            try(Context ignored = idleTimer.time()) {
+            try (Context ignored = idleTimer.time()) {
                 id = jedis.brpoplpush(queueName, inFlightQueueName, (int) timeout.getSeconds());
             }
             // If something goes wrong after this, the job will be stuck in inflightIteration
@@ -361,7 +373,8 @@ public class Redisq<T extends Document> implements Queue<T> {
     @Override
     public void pushAndWait(T dummyObject, long waitTimeout, TimeUnit waitTimeoutUnit)
             throws WaitException {
-        Future<Void> f = getFutureForDocumentStateWait(ImmutableSet.of(DONE, FAILED), dummyObject.getIdAsString());
+        Future<Void> f = getFutureForDocumentStateWait(ImmutableSet.of(DONE, FAILED),
+                dummyObject.getIdAsString());
         push(dummyObject);
         try {
             f.get(waitTimeout, waitTimeoutUnit);
@@ -378,7 +391,7 @@ public class Redisq<T extends Document> implements Queue<T> {
     private Optional<StateInfo> getStateInfoFromRedisKey(String key) {
         try {
             String element;
-            try(Jedis jedis = jedisPool.getResource()) {
+            try (Jedis jedis = jedisPool.getResource()) {
                 element = jedis.get(key);
             }
             if (element == null) {
@@ -387,7 +400,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                 return Optional.of(stateMapper.deserialize(element));
             }
         } catch (DeserializationException e) {
-        throw new RedisqException("Could not deserialize state info for " + key, e);
-    }
+            throw new RedisqException("Could not deserialize state info for " + key, e);
+        }
     }
 }

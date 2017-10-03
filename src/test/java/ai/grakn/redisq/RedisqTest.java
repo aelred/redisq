@@ -37,6 +37,7 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisMonitor;
 import redis.clients.jedis.JedisPool;
 import redis.clients.util.Pool;
 import redis.embedded.RedisServer;
@@ -50,7 +51,7 @@ public class RedisqTest {
     private static final TimeUnit UNIT = SECONDS;
     private static final int PORT = 6382;
     private static final int QUEUES = 5;
-    private static final int DOCUMENTS = 10;
+    private static final int DOCUMENTS = 200;
     private static final String LOCALHOST = "localhost";
     private static final int PRODUCERS = 10;
     private static final int CONSUMERS = 3;
@@ -74,15 +75,17 @@ public class RedisqTest {
         genericObjectPoolConfig.setMaxTotal(JEDIS_POOL_MAX_TOTAL);
         genericObjectPoolConfig.setMaxWaitMillis(JEDIS_POOL_MAX_WAIT_MILLIS);
         jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
-        try(Jedis resource = jedisPool.getResource()) {
-            resource.flushAll();
-//            Executors.newSingleThreadExecutor().submit( () -> resource.monitor(new JedisMonitor() {
-//                public void onCommand(String command) {
-//                    System.out.println(command);
-//                }
-//            }));
-        }
 
+         //   resource.flushAll();
+        Executors.newSingleThreadExecutor().submit( () -> {
+            try(Jedis resource = jedisPool.getResource()) {
+                resource.monitor(new JedisMonitor() {
+                public void onCommand(String command) {
+                    System.out.println(command);
+                }
+            });
+            }
+        });
     }
 
     @Test
@@ -135,7 +138,6 @@ public class RedisqTest {
         ExecutorService consumersThreadPool = Executors.newFixedThreadPool(CONSUMERS);
         String sharedQueueName = "prod_con_example_queue";
         Set<Future> producers = new HashSet<>();
-        Names names = new Names();
         for(int i = 0; i < PRODUCERS; i++) {
             final int pid = i;
             Future<Void> future = producersThreadPool.submit(() -> {
@@ -168,14 +170,7 @@ public class RedisqTest {
                     } catch (Throwable e) {
                         LOG.error("Wait for {} failed", pidid, e);
                         try(Jedis resource = jedisPool.getResource()) {
-                            String lockId = names.lockKeyFromId(pidid);
-                            String lock = resource.get(lockId);
-                            List<String> queue = resource.lrange(sharedQueueName, 0, -1);
-                            String content = resource.get(names.contentKeyFromId(pidid));
-                            String state = resource.get(names.stateKeyFromId(pidid));
-                            Boolean channelExists = resource
-                                    .exists(names.stateChannelKeyFromId(pidid));
-                            LOG.error("Diagnostic info. \nLock: {}\nQueue: {}\nContent: {}\nState: {}\nChannel Exists:{}", lock, queue, content, state, channelExists);
+                            diagnostics(sharedQueueName, pidid, resource);
                         } catch (Throwable eDiag) {
                             LOG.error("Failed get diagnostics", eDiag);
                         } finally {
@@ -211,6 +206,18 @@ public class RedisqTest {
                 e.printStackTrace();
             }
         });
+    }
+
+    private void diagnostics(String queueName, String pidid, Jedis resource) {
+        Names names = new Names();
+        String lockId = names.lockKeyFromId(pidid);
+        String lock = resource.get(lockId);
+        List<String> queue = resource.lrange(queueName, 0, -1);
+        String content = resource.get(names.contentKeyFromId(pidid));
+        String state = resource.get(names.stateKeyFromId(pidid));
+        Boolean channelExists = resource
+                .exists(names.stateChannelKeyFromId(pidid));
+        LOG.error("Diagnostic info. \nLock: {}\nQueue: {}\nContent: {}\nState: {}\nChannel Exists:{}", lock, queue, content, state, channelExists);
     }
 
     private String makePid(int pid, int j) {
@@ -299,7 +306,13 @@ public class RedisqTest {
                 } catch (InterruptedException | ExecutionException e) {
                     e.printStackTrace();
                 }
-                assertThat(redisq.getState(id).get().getState(), equalTo(DONE));
+                State state = redisq.getState(id).get().getState();
+                if (!state.equals(DONE)) {
+                    try(Jedis resource = jedisPool.getResource()) {
+                        diagnostics(queueName, id, resource);
+                    }
+                }
+                assertThat(id + " not done", state, equalTo(DONE));
             }
             try {
                 redisq.close();
