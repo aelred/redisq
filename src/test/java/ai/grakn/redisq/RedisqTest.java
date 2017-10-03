@@ -2,6 +2,7 @@ package ai.grakn.redisq;
 
 import static ai.grakn.redisq.State.DONE;
 import static ai.grakn.redisq.State.FAILED;
+import static ai.grakn.redisq.State.PROCESSING;
 import ai.grakn.redisq.exceptions.RedisqException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.WaitException;
@@ -49,8 +50,8 @@ public class RedisqTest {
     private static final long TIMEOUT = 30;
     private static final TimeUnit UNIT = SECONDS;
     private static final int PORT = 6382;
-    private static final int QUEUES = 5;
-    private static final int DOCUMENTS = 200;
+    private static final int QUEUES = 1;
+    private static final int DOCUMENTS = 3;
     private static final String LOCALHOST = "localhost";
     private static final int PRODUCERS = 10;
     private static final int CONSUMERS = 3;
@@ -65,6 +66,7 @@ public class RedisqTest {
     @BeforeClass
     public static void beforeClass() throws IOException {
         server = new RedisServer(PORT);
+        //server = RedisServer.newRedisServer();
         server.start();
     }
 
@@ -74,7 +76,7 @@ public class RedisqTest {
         genericObjectPoolConfig.setMaxTotal(JEDIS_POOL_MAX_TOTAL);
         genericObjectPoolConfig.setMaxWaitMillis(JEDIS_POOL_MAX_WAIT_MILLIS);
         jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
-
+//        jedisPool = new JedisPool(genericObjectPoolConfig, server.getHost(), server.getBindPort());
          //   resource.flushAll();
 //        Executors.newSingleThreadExecutor().submit( () -> {
 //            try(Jedis resource = jedisPool.getResource()) {
@@ -231,6 +233,7 @@ public class RedisqTest {
         String lockId = redisq.getNames().lockKeyFromId(SOME_ID);
         try(Jedis resource = jedisPool.getResource()) {
             resource.setex(lockId,  1, "locked");
+            redisq.setState(SOME_ID, PROCESSING);
             resource.brpoplpush(redisq.getNames().queueNameFor(redisq.getName()),  redisq.getNames().inFlightQueueNameFor(redisq.getName()), 1);
         }
         Future<Void> f = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), SOME_ID);
@@ -290,17 +293,21 @@ public class RedisqTest {
             for (int i = 0; i < DOCUMENTS; i++) {
                 String id = Names.getRandomString();
                 Future<Void> sub = redisq.getFutureForDocumentStateWait(ImmutableSet.of(DONE), id);
+                LOG.info("Pushing {}", id);
                 redisq.push(new DummyObject(id, 23, new HashMap<>()));
                 ids.put(id, sub);
             }
             idsAndCompletable.put(someQueueId, ids);
+            LOG.info("Closing queue {}", someQueueId);
             redisq.close();
         }
+        LOG.info("Reading");
         idsAndCompletable.forEach((queueName, idMap) -> {
             Queue<DummyObject> redisq = getRedisq(queueName);
             redisq.startConsumer();
             for(String id : idMap.keySet()) {
                 try {
+                    LOG.info("Waiting on {}", id);
                     idMap.get(id).get();
                 } catch (InterruptedException | ExecutionException e) {
                     e.printStackTrace();

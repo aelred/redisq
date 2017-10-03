@@ -57,7 +57,7 @@ public class StateFuture implements Future<Void> {
                     if (targetState.contains(s.getState())) {
                         latch.countDown();
                         LOG.debug("Received expected state, completing {}", channel);
-                        unsubscribe();
+                        unsubscribe(channel);
                     }
                 } catch (DeserializationException e) {
                     LOG.error("Could not deserialise state {}", id, e);
@@ -132,7 +132,7 @@ public class StateFuture implements Future<Void> {
 
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
-        sub.unsubscribe();
+        sub.unsubscribe(names.stateChannelKeyFromId(id));
         return subscription.cancel(mayInterruptIfRunning);
     }
 
