@@ -37,7 +37,6 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisMonitor;
 import redis.clients.jedis.JedisPool;
 import redis.clients.util.Pool;
 import redis.embedded.RedisServer;
@@ -77,15 +76,15 @@ public class RedisqTest {
         jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
 
          //   resource.flushAll();
-        Executors.newSingleThreadExecutor().submit( () -> {
-            try(Jedis resource = jedisPool.getResource()) {
-                resource.monitor(new JedisMonitor() {
-                public void onCommand(String command) {
-                    System.out.println(command);
-                }
-            });
-            }
-        });
+//        Executors.newSingleThreadExecutor().submit( () -> {
+//            try(Jedis resource = jedisPool.getResource()) {
+//                resource.monitor(new JedisMonitor() {
+//                public void onCommand(String command) {
+//                    System.out.println(command);
+//                }
+//            });
+//            }
+//        });
     }
 
     @Test
