@@ -77,7 +77,10 @@ public class RedisqTest {
         genericObjectPoolConfig.setMaxWaitMillis(JEDIS_POOL_MAX_WAIT_MILLIS);
         jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
 //        jedisPool = new JedisPool(genericObjectPoolConfig, server.getHost(), server.getBindPort());
-         //   resource.flushAll();
+//
+        try(Jedis resource = jedisPool.getResource()) {
+            resource.flushAll();
+        }
 //        Executors.newSingleThreadExecutor().submit( () -> {
 //            try(Jedis resource = jedisPool.getResource()) {
 //                resource.monitor(new JedisMonitor() {
