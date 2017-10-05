@@ -24,16 +24,9 @@ Add it as a dependency in Maven as:
     <dependency>
         <groupId>ai.grakn</groupId>
         <artifactId>redisq</artifactId>
-        <version>0.0.4</version>
+        <version>0.0.5</version>
     </dependency> 
 </dependencies>
-
-<repositories>
-    <repository>
-        <id>releases</id>
-        <url>https://maven.grakn.ai/content/repositories/releases/</url>
-    </repository>
-</repositories>
 ```
 
 
