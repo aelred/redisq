@@ -28,6 +28,7 @@ import com.github.rholder.retry.StopStrategies;
 import com.github.rholder.retry.WaitStrategies;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -38,7 +39,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -85,9 +85,11 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Timer pushTimer;
     private final Timer executeWaitTimer;
     private final Meter serializationErrors;
+    private ExecutorService mainThreadPool;
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
-            Duration discardTime, Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool, ExecutorService threadPool,
+            Duration discardTime, Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool,
+            ExecutorService threadPool,
             MetricRegistry metricRegistry) {
         Preconditions.checkState(ttlStateInfo.minus(lockTime).toMillis() > MARGIN_MS,
                 "The ttl for a state has to be higher than the time a document is locked for by "
@@ -106,7 +108,8 @@ public class Redisq<T extends Document> implements Queue<T> {
         this.threadPool = threadPool;
         this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory()
                 .constructParametricType(TimedWrap.class, klass));
-
+        this.mainThreadPool = Executors.newFixedThreadPool(2,
+                new ThreadFactoryBuilder().setNameFormat("redisq-consumer-%s").build());
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
         this.idleTimer = metricRegistry.timer(name(this.getClass(), "idle"));
         metricRegistry.register(name(this.getClass(), "queue", "size"),
@@ -155,13 +158,13 @@ public class Redisq<T extends Document> implements Queue<T> {
     public void startConsumer() {
         LOG.debug("Starting consumer {}", name);
         working.set(true);
-        mainLoop = Executors.newSingleThreadExecutor().submit(() -> {
+        mainLoop = mainThreadPool.submit(() -> {
             // We keep one resource for the iteration
             while (working.get()) {
                 iteration();
             }
         });
-        inFlightLoop = Executors.newSingleThreadExecutor().submit(() -> {
+        inFlightLoop = mainThreadPool.submit(() -> {
             while (working.get()) {
                 inflightIteration();
                 try {
@@ -216,7 +219,9 @@ public class Redisq<T extends Document> implements Queue<T> {
                                     jedis.lrem(inFlightQueueName, 1, id);
                                 }
                             } else {
-                                LOG.warn("Found expired document in inflight but no state info found for {}", id);
+                                LOG.warn(
+                                        "Found expired document in inflight but no state info found for {}",
+                                        id);
                             }
                         }
                     }
@@ -357,6 +362,8 @@ public class Redisq<T extends Document> implements Queue<T> {
         LOG.debug("Shutting down queue {}", name);
         threadPool.shutdown();
         threadPool.awaitTermination(1, TimeUnit.MINUTES);
+        mainThreadPool.shutdown();
+        mainThreadPool.awaitTermination(1, TimeUnit.MINUTES);
         LOG.info("Closed {}", name);
     }
 
@@ -377,8 +384,8 @@ public class Redisq<T extends Document> implements Queue<T> {
                 dummyObject.getIdAsString());
         push(dummyObject);
         try {
-            f.get(waitTimeout, waitTimeoutUnit);
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            f.get();
+        } catch (InterruptedException | ExecutionException e) {
             throw new WaitException(
                     "Could not wait for " + dummyObject.getIdAsString() + " to be done", e);
         }

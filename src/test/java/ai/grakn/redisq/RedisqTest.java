@@ -1,5 +1,6 @@
 package ai.grakn.redisq;
 
+import ai.grakn.redismock.RedisServer;
 import static ai.grakn.redisq.State.DONE;
 import static ai.grakn.redisq.State.FAILED;
 import static ai.grakn.redisq.State.PROCESSING;
@@ -40,7 +41,7 @@ import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.util.Pool;
-import redis.embedded.RedisServer;
+//import redis.embedded.RedisServer;
 
 public class RedisqTest {
 
@@ -65,8 +66,8 @@ public class RedisqTest {
 
     @BeforeClass
     public static void beforeClass() throws IOException {
-        server = new RedisServer(PORT);
-        //server = RedisServer.newRedisServer();
+//        server = new RedisServer(PORT);
+        server = RedisServer.newRedisServer();
         server.start();
     }
 
@@ -75,8 +76,8 @@ public class RedisqTest {
         GenericObjectPoolConfig genericObjectPoolConfig = new GenericObjectPoolConfig();
         genericObjectPoolConfig.setMaxTotal(JEDIS_POOL_MAX_TOTAL);
         genericObjectPoolConfig.setMaxWaitMillis(JEDIS_POOL_MAX_WAIT_MILLIS);
-        jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
-//        jedisPool = new JedisPool(genericObjectPoolConfig, server.getHost(), server.getBindPort());
+//        jedisPool = new JedisPool(genericObjectPoolConfig, LOCALHOST, PORT);
+        jedisPool = new JedisPool(genericObjectPoolConfig, server.getHost(), server.getBindPort());
 //
         try(Jedis resource = jedisPool.getResource()) {
             resource.flushAll();
