@@ -206,7 +206,7 @@ public class Redisq<T extends Document> implements Queue<T> {
                             Optional<StateInfo> state = getState(id);
                             if (state.isPresent()) {
                                 if (state.get().getState().equals(PROCESSING)) {
-                                    LOG.trace("Found unlocked element {}, lockId({}), ttl={}", id,
+                                    LOG.info("Found unlocked element {}, lockId({}), ttl={}", id,
                                             lockId, ttl);
                                     try (Context ignored = restoreBlockedTimer.time()) {
                                         // Restore it in the main queue
@@ -216,7 +216,10 @@ public class Redisq<T extends Document> implements Queue<T> {
                                         multi.exec();
                                     }
                                 } else {
+                                    LOG.error("Losing a job. Found unlocked element {}, lockId({}), ttl={}, but state was {}", id,
+                                            lockId, ttl, state.get());
                                     jedis.lrem(inFlightQueueName, 1, id);
+                                    jedis.publish(names.stateChannelKeyFromId(id), Names.STOP);
                                 }
                             } else {
                                 LOG.warn(

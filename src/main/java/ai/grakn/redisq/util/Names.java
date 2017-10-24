@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.Random;
 
 public class Names {
+    public static final String STOP = "stop";
 
     private static final Random random = new Random();
 

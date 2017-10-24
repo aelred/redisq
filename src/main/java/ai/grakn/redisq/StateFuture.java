@@ -4,6 +4,7 @@ import ai.grakn.redisq.exceptions.DeserializationException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.SubscriptionInterruptedException;
 import ai.grakn.redisq.util.Names;
+import static ai.grakn.redisq.util.Names.STOP;
 import com.codahale.metrics.MetricRegistry;
 import static com.codahale.metrics.MetricRegistry.name;
 import com.codahale.metrics.Timer;
@@ -110,7 +111,7 @@ public class StateFuture implements Future<Void> {
                     try {
                         if (targetState.contains(Redisq.stateMapper.deserialize(state).getState())) {
                             LOG.debug("Unsubscribed because status was already as expected {}", id);
-                            jedis.publish(stateChannel, "stop");
+                            jedis.publish(stateChannel, STOP);
                             return CompletableFuture.completedFuture(null);
                         }
                     } catch (DeserializationException e) {

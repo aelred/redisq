@@ -159,11 +159,13 @@ public class RedisqTest {
                 for(int j = 0; j < DOCUMENTS; j++) {
                     // Note how we are making the subbscriptions before the push.
                     // Otherwise we might lose the state change
+                    String pidid = makePid(pid, j);
                     Future<Void> futureForDocumentStateWait = redisq
-                            .getFutureForDocumentStateWait(ImmutableSet.of(DONE),  makePid(pid, j), 1,
+                            .getFutureForDocumentStateWait(ImmutableSet.of(DONE), pidid, 1,
                                     SECONDS, jedisPool);
                     subscriptions.add(futureForDocumentStateWait);
-                    redisq.push(new DummyObject(makePid(pid, j)));
+                    LOG.debug("Pushing {}", pidid);
+                    redisq.push(new DummyObject(pidid));
                 }
                 for(int j = 0; j < DOCUMENTS; j++) {
                     String pidid = makePid(pid, j);
