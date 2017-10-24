@@ -160,6 +160,7 @@ public class RedisqTest {
                     // Note how we are making the subbscriptions before the push.
                     // Otherwise we might lose the state change
                     String pidid = makePid(pid, j);
+                    LOG.debug("Subscribing to {}", pidid);
                     Future<Void> futureForDocumentStateWait = redisq
                             .getFutureForDocumentStateWait(ImmutableSet.of(DONE), pidid, 1,
                                     SECONDS, jedisPool);
@@ -189,11 +190,13 @@ public class RedisqTest {
             });
             producers.add(future);
         }
+        LOG.info("Starting consumers");
         Set<Redisq<DummyObject>> consumers = new HashSet<>();
         for(int i = 0; i < CONSUMERS; i++) {
             consumersThreadPool.submit(() -> {
                 Redisq<DummyObject> redisq = getRedisq(sharedQueueName);
                 redisq.startConsumer();
+                LOG.info("Started consumer for {}", sharedQueueName);
                 consumers.add(redisq);
             });
         }
