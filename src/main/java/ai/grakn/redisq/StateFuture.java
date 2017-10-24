@@ -52,15 +52,18 @@ public class StateFuture implements Future<Void> {
 
             @Override
             public void onMessage(String channel, String message) {
+                boolean finish; // = false
                 try {
                     StateInfo s = Redisq.stateMapper.deserialize(message);
-                    if (targetState.contains(s.getState())) {
-                        latch.countDown();
-                        LOG.debug("Received expected state, completing {}", channel);
-                        unsubscribe(channel);
-                    }
+                    finish = targetState.contains(s.getState());
                 } catch (DeserializationException e) {
-                    LOG.error("Could not deserialise state {}", id, e);
+                    LOG.info("Channel: {}. Found non state message: {}", channel, message);
+                    finish = true;
+                }
+                if (finish) {
+                    latch.countDown();
+                    LOG.debug("Received expected state, completing {}", channel);
+                    unsubscribe(channel);
                 }
             }
         };
@@ -75,21 +78,10 @@ public class StateFuture implements Future<Void> {
     }
 
     private CompletableFuture<Void> subscribe(long timeout, TimeUnit unit) throws InterruptedException {
+        final String stateChannel = new Names().stateChannelKeyFromId(id);
         CompletableFuture<Void> f = CompletableFuture.runAsync(() -> {
             try{
                 try (Jedis jedis = jedisPool.getResource()) {
-                    String state = jedis.get(names.stateKeyFromId(id));
-                    if (state != null) {
-                        try {
-                            if (targetState.contains(Redisq.stateMapper.deserialize(state).getState())) {
-                                LOG.debug("Unsubscribed because status was already as expected {}", id);
-                                return;
-                            }
-                        } catch (DeserializationException e) {
-                            LOG.error("Could not deserialize state for {}", id, e);
-                        }
-                    }
-                    String stateChannel = new Names().stateChannelKeyFromId(id);
                     LOG.debug("Waiting for changes to {}", stateChannel);
                     try (Context ignored = subscribeWait.time()) {
                         jedis.subscribe(sub, stateChannel);
@@ -109,6 +101,19 @@ public class StateFuture implements Future<Void> {
         if (!f.isCompletedExceptionally() && !f.isCancelled()) {
             latch.await(timeout, unit);
             LOG.debug("Subscribed successfully to {}", id);
+            try (Jedis jedis = jedisPool.getResource()) {
+                String state = jedis.get(names.stateKeyFromId(id));
+                if (state != null) {
+                    try {
+                        if (targetState.contains(Redisq.stateMapper.deserialize(state).getState())) {
+                            LOG.debug("Unsubscribed because status was already as expected {}", id);
+                            jedis.publish(stateChannel, "stop");
+                        }
+                    } catch (DeserializationException e) {
+                        LOG.error("Could not deserialize state for {}", id, e);
+                    }
+                }
+            }
         } else {
             LOG.error("QueueConsumer ended before expected");
         }
