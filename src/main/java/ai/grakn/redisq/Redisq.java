@@ -89,8 +89,7 @@ public class Redisq<T extends Document> implements Queue<T> {
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
             Duration discardTime, Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool,
-            ExecutorService threadPool,
-            MetricRegistry metricRegistry) {
+            ExecutorService threadPool, MetricRegistry metricRegistry) {
         Preconditions.checkState(ttlStateInfo.minus(lockTime).toMillis() > MARGIN_MS,
                 "The ttl for a state has to be higher than the time a document is locked for by "
                         + MARGIN_MS + "ms");
@@ -205,7 +204,8 @@ public class Redisq<T extends Document> implements Queue<T> {
                         if (ttl == 0 || ttl == -2) {
                             Optional<StateInfo> state = getState(id);
                             if (state.isPresent()) {
-                                if (state.get().getState().equals(PROCESSING)) {
+                                StateInfo stateInfo = state.get();
+                                if (stateInfo.getState().equals(PROCESSING)) {
                                     LOG.info("Found unlocked element {}, lockId({}), ttl={}", id,
                                             lockId, ttl);
                                     try (Context ignored = restoreBlockedTimer.time()) {
@@ -216,8 +216,16 @@ public class Redisq<T extends Document> implements Queue<T> {
                                         multi.exec();
                                     }
                                 } else {
-                                    LOG.error("Losing a job. Found unlocked element {}, lockId({}), ttl={}, but state was {}", id,
-                                            lockId, ttl, state.get());
+                                    if (stateInfo.getState().equals(DONE)) {
+                                        LOG.debug("Found unlocked element it wasn't removed from "
+                                                        + "the inflight queue {}, lockId({}), "
+                                                        + "ttl={}, but state was {}", id,
+                                                lockId, ttl, stateInfo);
+                                    } else {
+                                        LOG.error("Losing a job. Found unlocked element {}, "
+                                                        + "lockId({}), ttl={}, but state was {}",
+                                                id, lockId, ttl, stateInfo);
+                                    }
                                     jedis.lrem(inFlightQueueName, 1, id);
                                     jedis.publish(names.stateChannelKeyFromId(id), Names.STOP);
                                 }

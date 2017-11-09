@@ -16,10 +16,9 @@ import static ai.grakn.redisq.State.FAILED;
 
 /**
  * TODO: docs
- *
- * @param <T>
  */
 public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
+
     private static final Logger LOG = LoggerFactory.getLogger(RedisqConsumer.class);
 
     private Consumer<T> consumer;
@@ -28,10 +27,6 @@ public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
 
     /**
      * TODO: docs
-     *
-     * @param consumer
-     * @param jedisPool
-     * @param tRedisq
      */
     public RedisqConsumer(Consumer<T> consumer, Pool<Jedis> jedisPool, Redisq<T> tRedisq) {
         this.consumer = consumer;
@@ -51,17 +46,18 @@ public class RedisqConsumer<T extends Document> implements QueueConsumer<T> {
     }
 
     private void updateState(T element, State state, String info) {
-         try(Jedis jedis = jedisPool.getResource()) {
+        try (Jedis jedis = jedisPool.getResource()) {
             String id = element.getIdAsString();
             tRedisq.setState(jedis, System.currentTimeMillis(), id, state, info);
             jedis.del(tRedisq.getNames().lockKeyFromId(id));
         } catch (JedisConnectionException jedisException) {
-            LOG.error("Pool is full  or terminated. Active: {}, idle: {}", jedisPool.getNumActive(), jedisPool.getNumIdle());
+            LOG.error("Pool is full  or terminated. Active: {}, idle: {}", jedisPool.getNumActive(),
+                    jedisPool.getNumIdle());
             throw jedisException;
         } catch (Exception e) {
-             LOG.error("Unexpected exception while updating state for {}", element, e);
-             throw e;
-         }
+            LOG.error("Unexpected exception while updating state for {}", element, e);
+            throw e;
+        }
         LOG.debug("Status {} set as {}", element.getIdAsString(), state);
     }
 

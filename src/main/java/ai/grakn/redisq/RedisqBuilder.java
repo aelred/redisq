@@ -2,15 +2,17 @@ package ai.grakn.redisq;
 
 import ai.grakn.redisq.util.Names;
 import com.codahale.metrics.MetricRegistry;
-import redis.clients.jedis.Jedis;
-import redis.clients.util.Pool;
-
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.time.Duration;
+import static java.time.temporal.ChronoUnit.DAYS;
+import static java.time.temporal.ChronoUnit.HOURS;
+import static java.time.temporal.ChronoUnit.MINUTES;
+import static java.time.temporal.ChronoUnit.SECONDS;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
-
-import static java.time.temporal.ChronoUnit.*;
+import redis.clients.jedis.Jedis;
+import redis.clients.util.Pool;
 
 
 public class RedisqBuilder<T extends Document> {
@@ -20,7 +22,8 @@ public class RedisqBuilder<T extends Document> {
     private Duration ttlStateInfo = Duration.of(1, DAYS);
     private Duration lockTime = Duration.of(5, MINUTES);
     private Duration discardTime = Duration.of(1, HOURS);
-    private ExecutorService threadPool = Executors.newFixedThreadPool(4 );
+    private ExecutorService threadPool = Executors.newFixedThreadPool(4,
+            new ThreadFactoryBuilder().setNameFormat("redisq-executor-%d").build());
     private Consumer<T> consumer;
     private Pool<Jedis> jedisPool;
     private Class<T> documentClass;
@@ -77,6 +80,7 @@ public class RedisqBuilder<T extends Document> {
     }
 
     public Redisq<T> createRedisq() {
-        return new Redisq<>(name, timeout, ttlStateInfo, lockTime, discardTime, consumer, documentClass, jedisPool, threadPool, metricRegistry);
+        return new Redisq<>(name, timeout, ttlStateInfo, lockTime, discardTime, consumer,
+                documentClass, jedisPool, threadPool, metricRegistry);
     }
 }
