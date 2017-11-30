@@ -1,9 +1,5 @@
 package ai.grakn.redisq;
 
-import static ai.grakn.redisq.State.DONE;
-import static ai.grakn.redisq.State.FAILED;
-import static ai.grakn.redisq.State.NEW;
-import static ai.grakn.redisq.State.PROCESSING;
 import ai.grakn.redisq.consumer.Mapper;
 import ai.grakn.redisq.consumer.QueueConsumer;
 import ai.grakn.redisq.consumer.RedisqConsumer;
@@ -17,7 +13,6 @@ import ai.grakn.redisq.util.Names;
 import com.codahale.metrics.CachedGauge;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
-import static com.codahale.metrics.MetricRegistry.name;
 import com.codahale.metrics.Timer;
 import com.codahale.metrics.Timer.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +24,12 @@ import com.github.rholder.retry.WaitStrategies;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Transaction;
+import redis.clients.util.Pool;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -38,16 +39,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Transaction;
-import redis.clients.util.Pool;
+
+import static ai.grakn.redisq.State.DONE;
+import static ai.grakn.redisq.State.FAILED;
+import static ai.grakn.redisq.State.NEW;
+import static ai.grakn.redisq.State.PROCESSING;
+import static com.codahale.metrics.MetricRegistry.name;
 
 public class Redisq<T extends Document> implements Queue<T> {
 
@@ -68,10 +71,11 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Duration timeout;
     private final Mapper<TimedWrap<T>> mapper;
     private final Names names;
+    private final long threadDelay;
     private final int lockTime;
     private final Pool<Jedis> jedisPool;
     private int ttlStateInfo;
-    private final ExecutorService threadPool;
+    private final ScheduledExecutorService threadPool;
     private final AtomicBoolean working = new AtomicBoolean(false);
     private final AtomicInteger runningThreads = new AtomicInteger(0);
     private Duration discardTime;
@@ -85,11 +89,11 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Timer pushTimer;
     private final Timer executeWaitTimer;
     private final Meter serializationErrors;
-    private ExecutorService mainThreadPool;
+    private ExecutorService  mainThreadPool;
 
     public Redisq(String name, Duration timeout, Duration ttlStateInfo, Duration lockTime,
             Duration discardTime, Consumer<T> consumer, Class<T> klass, Pool<Jedis> jedisPool,
-            ExecutorService threadPool, MetricRegistry metricRegistry) {
+                  ScheduledExecutorService threadPool, long threadDelay, MetricRegistry metricRegistry) {
         Preconditions.checkState(ttlStateInfo.minus(lockTime).toMillis() > MARGIN_MS,
                 "The ttl for a state has to be higher than the time a document is locked for by "
                         + MARGIN_MS + "ms");
@@ -105,10 +109,10 @@ public class Redisq<T extends Document> implements Queue<T> {
         this.inFlightQueueName = names.inFlightQueueNameFor(name);
         this.jedisPool = jedisPool;
         this.threadPool = threadPool;
+        this.threadDelay = threadDelay;
         this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory()
                 .constructParametricType(TimedWrap.class, klass));
-        this.mainThreadPool = Executors.newFixedThreadPool(2,
-                new ThreadFactoryBuilder().setNameFormat("redisq-consumer-%s").build());
+        this.mainThreadPool = Executors.newFixedThreadPool(2, new ThreadFactoryBuilder().setNameFormat("redisq-consumer-%s").build());
         this.pushTimer = metricRegistry.timer(name(this.getClass(), "push"));
         this.idleTimer = metricRegistry.timer(name(this.getClass(), "idle"));
         metricRegistry.register(name(this.getClass(), "queue", "size"),
@@ -303,14 +307,14 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     private void execute(TimedWrap<T> element) {
-        threadPool.execute(() -> {
+        threadPool.schedule(() -> {
             runningThreads.incrementAndGet();
             try {
                 subscription.process(element.getElement());
             } finally {
                 runningThreads.decrementAndGet();
             }
-        });
+        }, threadDelay, TimeUnit.SECONDS);
     }
 
     @Override
