@@ -197,14 +197,14 @@ public class Redisq<T extends Document> implements Queue<T> {
         try (Jedis jedis = jedisPool.getResource()) {
             processingElements = jedis.lrange(inFlightQueueName, 0, -1);
         }
-        LOG.debug("Found {} documents in flight", processingElements.size());
+        LOG.trace("Found {} documents in flight", processingElements.size());
         processingElements
                 .forEach(id -> {
                     try (Jedis jedis = jedisPool.getResource()) {
                         String lockId = names.lockKeyFromId(id);
                         // TODO We might get more than one consumer doing this
                         Long ttl = jedis.ttl(lockId);
-                        LOG.debug("Id {} has {} ttl", id, ttl);
+                        LOG.trace("Id {} has {} ttl", id, ttl);
                         if (ttl == 0 || ttl == -2) {
                             Optional<StateInfo> state = getState(id);
                             if (state.isPresent()) {
