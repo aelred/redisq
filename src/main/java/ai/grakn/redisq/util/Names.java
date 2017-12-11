@@ -18,6 +18,7 @@ public class Names {
 
     private static final String CONTENT = "content:";
     private static final String STATE = "state:";
+    private static final String DELAYED = "delayed:";
     private static final String STATE_CHANNEL = "state:channel:";
     private static final String LOCK = "lock:";
 
@@ -44,6 +45,10 @@ public class Names {
 
     public String lockKeyFromId(String idAsString) {
         return PREFIX + LOCK + encoded(idAsString);
+    }
+
+    public String delayedKeyFromId(String idAsString) {
+        return PREFIX + DELAYED + idAsString;
     }
 
     public static String getRandomString() {

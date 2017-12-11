@@ -1,8 +1,5 @@
 package ai.grakn.redisq;
 
-import static ai.grakn.redisq.State.DONE;
-import static ai.grakn.redisq.State.FAILED;
-import static ai.grakn.redisq.State.PROCESSING;
 import ai.grakn.redisq.exceptions.RedisqException;
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.WaitException;
@@ -10,6 +7,20 @@ import ai.grakn.redisq.util.DummyConsumer;
 import ai.grakn.redisq.util.DummyObject;
 import ai.grakn.redisq.util.Names;
 import com.google.common.collect.ImmutableSet;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
+import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Ignore;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.util.Pool;
+import redis.embedded.RedisServer;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,24 +34,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import java.util.concurrent.TimeoutException;
-import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
+
+import static ai.grakn.redisq.State.DONE;
+import static ai.grakn.redisq.State.FAILED;
+import static ai.grakn.redisq.State.PROCESSING;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-import redis.clients.util.Pool;
-import redis.embedded.RedisServer;
 
 public class RedisqTest {
 

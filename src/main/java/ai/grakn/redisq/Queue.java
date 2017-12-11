@@ -2,15 +2,14 @@ package ai.grakn.redisq;
 
 import ai.grakn.redisq.exceptions.StateFutureInitializationException;
 import ai.grakn.redisq.exceptions.WaitException;
-import ai.grakn.redisq.consumer.QueueConsumer;
+import redis.clients.jedis.Jedis;
+import redis.clients.util.Pool;
 
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
-import redis.clients.jedis.Jedis;
-import redis.clients.util.Pool;
 
 public interface Queue<T> {
     /**
@@ -100,10 +99,4 @@ public interface Queue<T> {
      * @return          A stream with all the states currently stored. The stream is null if finished.
      */
     Stream<Optional<ExtendedStateInfo>> getStates();
-
-    /**
-     * Getter for the consumer being used
-     * @return          The comsumer
-     */
-    QueueConsumer<T> getConsumer();
 }

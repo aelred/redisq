@@ -1,7 +1,6 @@
 package ai.grakn.redisq;
 
 import ai.grakn.redisq.consumer.Mapper;
-import ai.grakn.redisq.consumer.QueueConsumer;
 import ai.grakn.redisq.consumer.RedisqConsumer;
 import ai.grakn.redisq.consumer.TimedWrap;
 import ai.grakn.redisq.exceptions.DeserializationException;
@@ -16,11 +15,6 @@ import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.codahale.metrics.Timer.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.rholder.retry.RetryException;
-import com.github.rholder.retry.Retryer;
-import com.github.rholder.retry.RetryerBuilder;
-import com.github.rholder.retry.StopStrategies;
-import com.github.rholder.retry.WaitStrategies;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -42,7 +36,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -57,11 +50,6 @@ public class Redisq<T extends Document> implements Queue<T> {
     static final Mapper<StateInfo> stateMapper = new Mapper<>(StateInfo.class);
 
     private static final Logger LOG = LoggerFactory.getLogger(Redisq.class);
-    private static final Retryer<Integer> CLOSE_RETRIER = RetryerBuilder.<Integer>newBuilder()
-            .retryIfResult(r -> !(r != null && r == 0))
-            .withWaitStrategy(WaitStrategies.fixedWait(100, TimeUnit.MILLISECONDS))
-            .withStopStrategy(StopStrategies.stopAfterDelay(10, TimeUnit.SECONDS))
-            .build();
     private static final int DEFAULT_SUBSCRIPTION_WAIT_TIMEOUT_SECONDS = 30;
     private static final int MARGIN_MS = 60_000;
 
@@ -71,16 +59,13 @@ public class Redisq<T extends Document> implements Queue<T> {
     private final Duration timeout;
     private final Mapper<TimedWrap<T>> mapper;
     private final Names names;
-    private final long threadDelay;
     private final int lockTime;
     private final Pool<Jedis> jedisPool;
+    private final Scheduler<T> scheduler;
     private int ttlStateInfo;
-    private final ScheduledExecutorService threadPool;
     private final AtomicBoolean working = new AtomicBoolean(false);
-    private final AtomicInteger runningThreads = new AtomicInteger(0);
     private Duration discardTime;
     private final MetricRegistry metricRegistry;
-    private QueueConsumer<T> subscription;
     private Future<?> mainLoop;
     private Future<?> inFlightLoop;
 
@@ -103,13 +88,14 @@ public class Redisq<T extends Document> implements Queue<T> {
         this.lockTime = (int) lockTime.getSeconds();
         this.discardTime = discardTime;
         this.metricRegistry = metricRegistry;
-        this.subscription = new RedisqConsumer<>(consumer, jedisPool, this);
+        RedisqConsumer<T> subscription = new RedisqConsumer<>(consumer, jedisPool, this);
+
+        Mapper<T> documentMapper = new Mapper<>(klass);
+        this.scheduler = Scheduler.of(threadDelay, threadPool, subscription, jedisPool, documentMapper);
         this.names = new Names();
         this.queueName = names.queueNameFor(name);
         this.inFlightQueueName = names.inFlightQueueNameFor(name);
         this.jedisPool = jedisPool;
-        this.threadPool = threadPool;
-        this.threadDelay = threadDelay;
         this.mapper = new Mapper<>(new ObjectMapper().getTypeFactory()
                 .constructParametricType(TimedWrap.class, klass));
         this.mainThreadPool = Executors.newFixedThreadPool(2, new ThreadFactoryBuilder().setNameFormat("redisq-consumer-%s").build());
@@ -307,14 +293,7 @@ public class Redisq<T extends Document> implements Queue<T> {
     }
 
     private void execute(TimedWrap<T> element) {
-        threadPool.schedule(() -> {
-            runningThreads.incrementAndGet();
-            try {
-                subscription.process(element.getElement());
-            } finally {
-                runningThreads.decrementAndGet();
-            }
-        }, threadDelay, TimeUnit.SECONDS);
+        scheduler.execute(element.getElement());
     }
 
     @Override
@@ -364,19 +343,13 @@ public class Redisq<T extends Document> implements Queue<T> {
                 try {
                     mainLoop.get();
                     inFlightLoop.get();
-                    try {
-                        CLOSE_RETRIER.call(this.runningThreads::get);
-                    } catch (RetryException e) {
-                        LOG.warn("Closing while some threads are still running");
-                    }
+                    scheduler.close();
                 } catch (ExecutionException e) {
                     LOG.error("Error during close", e);
                 }
             }
         }
         LOG.debug("Shutting down queue {}", name);
-        threadPool.shutdown();
-        threadPool.awaitTermination(1, TimeUnit.MINUTES);
         mainThreadPool.shutdown();
         mainThreadPool.awaitTermination(1, TimeUnit.MINUTES);
         LOG.info("Closed {}", name);
@@ -385,11 +358,6 @@ public class Redisq<T extends Document> implements Queue<T> {
     @Override
     public String getName() {
         return name;
-    }
-
-    @Override
-    public QueueConsumer<T> getConsumer() {
-        return subscription;
     }
 
     @Override
